@@ -46,11 +46,35 @@ public class CoreProfileClient {
         }
     }
 
+    public BotShiftsResponseDto getShifts(long telegramChatId) {
+        try {
+            return restClient.get()
+                    .uri("/api/bot/me/shifts")
+                    .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
+                    .retrieve()
+                    .body(BotShiftsResponseDto.class);
+        } catch (RestClientResponseException e) {
+            throw new CoreProfileException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        }
+    }
+
+    public BotVacationsResponseDto getVacations(long telegramChatId) {
+        try {
+            return restClient.get()
+                    .uri("/api/bot/me/vacations")
+                    .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
+                    .retrieve()
+                    .body(BotVacationsResponseDto.class);
+        } catch (RestClientResponseException e) {
+            throw new CoreProfileException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        }
+    }
+
     public static final class CoreProfileException extends RuntimeException {
         private final int status;
 
         public CoreProfileException(int status, String body) {
-            super("Core /api/bot/me/profile HTTP " + status + ": " + body);
+            super("Core bot API HTTP " + status + ": " + body);
             this.status = status;
         }
 

@@ -6,6 +6,11 @@ import com.company.shtopor.vzvodbot.core.BotAddressPatchDto;
 import com.company.shtopor.vzvodbot.core.BotProfileDto;
 import com.company.shtopor.vzvodbot.core.BotProfilePatchDto;
 import com.company.shtopor.vzvodbot.core.CoreAuthClient;
+import com.company.shtopor.vzvodbot.core.BotShiftItemDto;
+import com.company.shtopor.vzvodbot.core.BotShiftsResponseDto;
+import com.company.shtopor.vzvodbot.core.BotVacationBalanceDto;
+import com.company.shtopor.vzvodbot.core.BotVacationsResponseDto;
+import com.company.shtopor.vzvodbot.core.BotVocationItemDto;
 import com.company.shtopor.vzvodbot.core.CoreProfileClient;
 import com.company.shtopor.vzvodbot.session.AddressEditSession;
 import com.company.shtopor.vzvodbot.session.AddressEditSessionStore;
@@ -65,6 +70,8 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private static final Pattern INDEX_6 = Pattern.compile("^\\d{6}$");
 
     private static final DateTimeFormatter DATE_RU = DateTimeFormatter.ofPattern("dd.MM.yyyy", Locale.forLanguageTag("ru-RU"));
+    private static final DateTimeFormatter TIME_SHORT = DateTimeFormatter.ofPattern("HH:mm", Locale.forLanguageTag("ru-RU"));
+    private static final int MAX_BOT_MESSAGE = 4000;
 
     private final TelegramBotProperties telegramProps;
     private final CoreAuthClient coreAuthClient;
@@ -187,12 +194,12 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     handleLogout(chatId);
                     return;
                 }
-                if (BTN_SHIFTS.equals(text) || BTN_VACATIONS.equals(text)) {
-                    execute(SendMessage.builder()
-                            .chatId(chatId)
-                            .text("Раздел в разработке (см. ТЗ этапы 3 и 6).")
-                            .replyMarkup(mainMenuKeyboard())
-                            .build());
+                if (BTN_SHIFTS.equals(text)) {
+                    handleMyShifts(chatId);
+                    return;
+                }
+                if (BTN_VACATIONS.equals(text)) {
+                    handleMyVacations(chatId);
                     return;
                 }
             }
@@ -235,6 +242,134 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     .replyMarkup(loggedOutKeyboard())
                     .build());
         }
+    }
+
+    private void handleMyShifts(Long chatId) throws TelegramApiException {
+        try {
+            BotShiftsResponseDto r = coreProfileClient.getShifts(chatId);
+            String text = truncateTelegram(formatShifts(r));
+            execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text(text)
+                    .replyMarkup(mainMenuKeyboard())
+                    .build());
+        } catch (CoreProfileClient.CoreProfileException e) {
+            execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text(profileErrorHint(e.getStatus()))
+                    .replyMarkup(mainMenuKeyboard())
+                    .build());
+        } catch (Exception e) {
+            log.error("Смены chatId={}", chatId, e);
+            execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text("Не удалось загрузить смены (Core).")
+                    .replyMarkup(mainMenuKeyboard())
+                    .build());
+        }
+    }
+
+    private void handleMyVacations(Long chatId) throws TelegramApiException {
+        try {
+            BotVacationsResponseDto r = coreProfileClient.getVacations(chatId);
+            String text = truncateTelegram(formatVacations(r));
+            execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text(text)
+                    .replyMarkup(mainMenuKeyboard())
+                    .build());
+        } catch (CoreProfileClient.CoreProfileException e) {
+            execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text(profileErrorHint(e.getStatus()))
+                    .replyMarkup(mainMenuKeyboard())
+                    .build());
+        } catch (Exception e) {
+            log.error("Отпуска chatId={}", chatId, e);
+            execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text("Не удалось загрузить отпуска (Core).")
+                    .replyMarkup(mainMenuKeyboard())
+                    .build());
+        }
+    }
+
+    private static String formatShifts(BotShiftsResponseDto r) {
+        List<BotShiftItemDto> items = r != null && r.items() != null ? r.items() : List.of();
+        StringBuilder sb = new StringBuilder();
+        sb.append("🔄 Мои смены (последние записи из учётной системы).\n\n");
+        if (items.isEmpty()) {
+            sb.append("Пока нет ни одной смены, где вы указаны участником.\n");
+            return sb.toString();
+        }
+        for (BotShiftItemDto it : items) {
+            String dateStr = it.date() != null ? it.date().format(DATE_RU) : "—";
+            String t0 = it.startTime() != null ? it.startTime().format(TIME_SHORT) : "—";
+            String t1 = it.endTime() != null ? it.endTime().format(TIME_SHORT) : "—";
+            sb.append("• ")
+                    .append(dateStr)
+                    .append(" · ")
+                    .append(nnz(it.route()))
+                    .append(" · ")
+                    .append(nnz(it.shiftType()))
+                    .append(" · ")
+                    .append(nnz(it.departmentToday()))
+                    .append(" · ")
+                    .append(t0)
+                    .append("–")
+                    .append(t1)
+                    .append('\n');
+        }
+        return sb.toString();
+    }
+
+    private static String formatVacations(BotVacationsResponseDto r) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("🏖 Отпуска\n\n");
+        BotVacationBalanceDto b = r != null ? r.balance() : null;
+        if (b != null) {
+            sb.append("Положено дней: ")
+                    .append(b.entitled())
+                    .append("\nОсталось: ")
+                    .append(b.available())
+                    .append("\nИспользовано: ")
+                    .append(b.used())
+                    .append("\n\n");
+        }
+        List<BotVocationItemDto> items = r != null && r.items() != null ? r.items() : List.of();
+        if (items.isEmpty()) {
+            sb.append("Записей об отпусках пока нет.\n");
+        } else {
+            sb.append("Последние отпуска:\n");
+            int n = 1;
+            for (BotVocationItemDto v : items) {
+                String sd = v.startDate() != null ? v.startDate().format(DATE_RU) : "—";
+                String ed = v.endDate() != null ? v.endDate().format(DATE_RU) : "—";
+                sb.append(n++).append(") ").append(sd).append(" — ").append(ed);
+                if (v.countOfDays() != null) {
+                    sb.append(", ").append(v.countOfDays()).append(" дн.");
+                }
+                if (v.typeLabel() != null && !v.typeLabel().isBlank()) {
+                    sb.append(" · ").append(v.typeLabel());
+                }
+                sb.append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String nnz(String s) {
+        return s == null || s.isBlank() ? "—" : s;
+    }
+
+    private static String truncateTelegram(String text) {
+        if (text == null) {
+            return "";
+        }
+        if (text.length() <= MAX_BOT_MESSAGE) {
+            return text;
+        }
+        return text.substring(0, MAX_BOT_MESSAGE - 80) + "\n\n… (сообщение обрезано)";
     }
 
     private void handleCallbackQuery(CallbackQuery cq) throws TelegramApiException {
