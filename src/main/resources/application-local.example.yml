@@ -1,0 +1,21 @@
+# Скопируйте в application-local.yml и подставьте значения (файл в .gitignore).
+telegram:
+  bot:
+    token: "YOUR_BOT_TOKEN"
+    username: "SpecVzvodBot"
+    # Пример, если прямой доступ к api.telegram.org закрыт:
+    # proxy-host: "proxy.company.local"
+    # proxy-port: 8080
+    # proxy-type: "HTTP"
+    #
+    # VPN часто даёт локальный SOCKS (см. настройки клиента VPN):
+    # proxy-host: "127.0.0.1"
+    # proxy-port: 1080
+    # proxy-type: "SOCKS5"
+
+vzvod:
+  core:
+    base-url: "http://localhost:8080"
+    # Должен совпадать с vzvod.bot.api-key в Core (application-test-postgres или VZVOD_BOT_API_KEY).
+    # Оставьте пустым, если в Core ключ не задан — иначе Core ответит 401.
+    api-key: ""

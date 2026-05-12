@@ -1,0 +1,30 @@
+# Секреты — в application-local.yml (не в git), см. application-local.example.yml
+spring:
+  application:
+    name: vzvod-bot
+  config:
+    import: optional:classpath:application-local.yml
+
+server:
+  # Core обычно на 8080 — боту нужен отдельный порт (или задайте SERVER_PORT)
+  port: ${SERVER_PORT:8089}
+
+telegram:
+  bot:
+    token: ${TELEGRAM_BOT_TOKEN:}
+    username: ${TELEGRAM_BOT_USERNAME:SpecVzvodBot}
+    # Доступ к api.telegram.org через прокси (корп. сеть). Пустой proxy-host — прямое подключение.
+    proxy-host: ${TELEGRAM_BOT_PROXY_HOST:}
+    proxy-port: ${TELEGRAM_BOT_PROXY_PORT:0}
+    proxy-type: ${TELEGRAM_BOT_PROXY_TYPE:HTTP}
+
+vzvod:
+  core:
+    # Jmix Core (профиль test-postgres по умолчанию слушает :8080).
+    base-url: ${VZVOD_CORE_BASE_URL:http://localhost:8080}
+    # Должен совпадать с vzvod.bot.api-key в Core (или переменная VZVOD_BOT_API_KEY при запуске Core). Пусто — если в Core ключ не задан.
+    api-key: ${VZVOD_CORE_API_KEY:}
+
+logging:
+  level:
+    com.company.shtopor.vzvodbot: INFO
