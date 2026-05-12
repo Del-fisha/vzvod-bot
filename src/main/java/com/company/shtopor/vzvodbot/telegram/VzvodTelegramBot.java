@@ -80,6 +80,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private final PendingBotInputRegistry pendingInputs;
     private final AddressEditSessionStore addressSessions;
     private final ShiftCreationWizard shiftWizard;
+    private final ShiftEndTimeHandler shiftEndTimeHandler;
 
     public VzvodTelegramBot(
             TelegramBotProperties telegramProps,
@@ -88,7 +89,8 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             TelegramSessionRegistry sessions,
             PendingBotInputRegistry pendingInputs,
             AddressEditSessionStore addressSessions,
-            ShiftCreationWizard shiftWizard
+            ShiftCreationWizard shiftWizard,
+            ShiftEndTimeHandler shiftEndTimeHandler
     ) {
         super(buildBotOptions(telegramProps));
         this.telegramProps = telegramProps;
@@ -98,6 +100,12 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         this.pendingInputs = pendingInputs;
         this.addressSessions = addressSessions;
         this.shiftWizard = shiftWizard;
+        this.shiftEndTimeHandler = shiftEndTimeHandler;
+    }
+
+    private void clearShiftFlows(long chatId) {
+        shiftWizard.clear(chatId);
+        shiftEndTimeHandler.clearAwaiting(chatId);
     }
 
     private static DefaultBotOptions buildBotOptions(TelegramBotProperties p) {
@@ -180,6 +188,9 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     shiftWizard.onText(this, chatId, text);
                     return;
                 }
+                if (shiftEndTimeHandler.handleText(this, chatId, text)) {
+                    return;
+                }
                 PendingBotInput pending = pendingInputs.get(chatId).orElse(null);
                 if (pending == PendingBotInput.BREASTPLATE && !text.startsWith("/")) {
                     handleBreastplateText(chatId, text);
@@ -230,6 +241,14 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             shiftWizard.onBack(this, chatId);
             return;
         }
+        if (shiftEndTimeHandler.clearAwaitingIfPresent(chatId)) {
+            execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text("Ввод времени окончания отменён.")
+                    .replyMarkup(mainMenuKeyboard())
+                    .build());
+            return;
+        }
         if (addressSessions.get(chatId).isPresent()) {
             handleAddressBack(chatId);
             return;
@@ -244,7 +263,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private void goToMainMenu(Long chatId) throws TelegramApiException {
         pendingInputs.clear(chatId);
         addressSessions.clear(chatId);
-        shiftWizard.clear(chatId);
+        clearShiftFlows(chatId);
         if (sessions.find(chatId).isPresent()) {
             sendMainMenu(chatId, "Главное меню.");
         } else {
@@ -260,12 +279,19 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         try {
             BotShiftsResponseDto r = coreProfileClient.getShifts(chatId);
             String text = truncateTelegram(formatShifts(r));
+            List<BotShiftItemDto> items = r != null && r.items() != null ? r.items() : List.of();
+            List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+            rows.add(List.of(ib("➕ Новая смена", ShiftCreationWizard.CB_SHIFT_NEW)));
+            for (BotShiftItemDto it : items) {
+                if (it.id() != null && it.endTime() == null) {
+                    String shortDate = it.date() != null ? it.date().format(DATE_RU) : "?";
+                    rows.add(List.of(ib("Завершить · " + shortDate, ShiftEndTimeHandler.PREFIX_END_PICK + "|" + it.id())));
+                }
+            }
             execute(SendMessage.builder()
                     .chatId(chatId)
                     .text(text)
-                    .replyMarkup(InlineKeyboardMarkup.builder()
-                            .keyboard(List.of(List.of(ib("➕ Новая смена", ShiftCreationWizard.CB_SHIFT_NEW))))
-                            .build())
+                    .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
             execute(SendMessage.builder()
@@ -319,7 +345,12 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         for (BotShiftItemDto it : items) {
             String dateStr = it.date() != null ? it.date().format(DATE_RU) : "—";
             String t0 = it.startTime() != null ? it.startTime().format(TIME_SHORT) : "—";
-            String t1 = it.endTime() != null ? it.endTime().format(TIME_SHORT) : "—";
+            String interval;
+            if (it.endTime() != null) {
+                interval = t0 + "–" + it.endTime().format(TIME_SHORT);
+            } else {
+                interval = t0 + "–… (ожидается окончание)";
+            }
             sb.append("• ")
                     .append(dateStr)
                     .append(" · ")
@@ -329,9 +360,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     .append(" · ")
                     .append(nnz(it.departmentToday()))
                     .append(" · ")
-                    .append(t0)
-                    .append("–")
-                    .append(t1)
+                    .append(interval)
                     .append('\n');
         }
         return sb.toString();
@@ -437,6 +466,13 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         if (shiftWizard.handleCallback(this, chatId, data, cqId)) {
             return;
         }
+        if (shiftWizard.isActive(chatId) && shiftEndTimeHandler.isShiftEndCallback(data)) {
+            answerCallback(cqId);
+            return;
+        }
+        if (shiftEndTimeHandler.handleCallback(this, chatId, data, cqId)) {
+            return;
+        }
 
         Optional<AddressEditSession> sessionOpt = addressSessions.get(chatId);
         if (sessionOpt.isPresent()) {
@@ -461,7 +497,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             case CB_EDIT_BP -> {
                 answerCallback(cqId);
                 addressSessions.clear(chatId);
-                shiftWizard.clear(chatId);
+                clearShiftFlows(chatId);
                 pendingInputs.set(chatId, PendingBotInput.BREASTPLATE);
                 execute(SendMessage.builder()
                         .chatId(chatId)
@@ -472,7 +508,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             case CB_EDIT_ADDR_REG -> {
                 answerCallback(cqId);
                 pendingInputs.clear(chatId);
-                shiftWizard.clear(chatId);
+                clearShiftFlows(chatId);
                 AddressEditSession s = new AddressEditSession(AddressEditSession.Target.REGISTRATION);
                 addressSessions.put(chatId, s);
                 sendAddressStepPrompt(chatId, s);
@@ -480,7 +516,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             case CB_EDIT_ADDR_HAB -> {
                 answerCallback(cqId);
                 pendingInputs.clear(chatId);
-                shiftWizard.clear(chatId);
+                clearShiftFlows(chatId);
                 AddressEditSession s = new AddressEditSession(AddressEditSession.Target.HABITATION);
                 addressSessions.put(chatId, s);
                 sendAddressStepPrompt(chatId, s);
@@ -547,7 +583,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         try {
             coreProfileClient.updateProfile(chatId, patch);
             addressSessions.clear(chatId);
-            shiftWizard.clear(chatId);
+            clearShiftFlows(chatId);
             execute(SendMessage.builder()
                     .chatId(chatId)
                     .text("Адрес сохранён в карточке.")
@@ -555,7 +591,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
             addressSessions.clear(chatId);
-            shiftWizard.clear(chatId);
+            clearShiftFlows(chatId);
             execute(SendMessage.builder()
                     .chatId(chatId)
                     .text(profileErrorHint(e.getStatus()))
@@ -564,7 +600,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         } catch (Exception e) {
             log.error("Адрес chatId={}", chatId, e);
             addressSessions.clear(chatId);
-            shiftWizard.clear(chatId);
+            clearShiftFlows(chatId);
             execute(SendMessage.builder()
                     .chatId(chatId)
                     .text("Не удалось связаться с Core.")
@@ -792,7 +828,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
 
     private void applyMedical(Long chatId, String callbackQueryId, boolean value) throws TelegramApiException {
         addressSessions.clear(chatId);
-        shiftWizard.clear(chatId);
+        clearShiftFlows(chatId);
         try {
             coreProfileClient.updateProfile(chatId, new BotProfilePatchDto(null, value, null, null));
             answerCallback(callbackQueryId);
@@ -856,7 +892,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private void handleEditProfileMenu(Long chatId) throws TelegramApiException {
         pendingInputs.clear(chatId);
         addressSessions.clear(chatId);
-        shiftWizard.clear(chatId);
+        clearShiftFlows(chatId);
         try {
             coreProfileClient.getProfile(chatId);
         } catch (CoreProfileClient.CoreProfileException e) {
@@ -904,7 +940,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private void handleStart(Long chatId) throws TelegramApiException {
         pendingInputs.clear(chatId);
         addressSessions.clear(chatId);
-        shiftWizard.clear(chatId);
+        clearShiftFlows(chatId);
         if (sessions.find(chatId).isPresent()) {
             sendMainMenu(chatId, "Вы уже вошли. Выберите раздел:");
             return;
@@ -962,7 +998,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         sessions.remove(chatId);
         pendingInputs.clear(chatId);
         addressSessions.clear(chatId);
-        shiftWizard.clear(chatId);
+        clearShiftFlows(chatId);
         execute(SendMessage.builder()
                 .chatId(chatId)
                 .text("Вы вышли из сессии бота. Для входа снова нажмите /start и при необходимости отправьте контакт.")
@@ -1071,7 +1107,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             CoreAuthClient.AuthResponse r = coreAuthClient.authenticate(phone, chatId);
             pendingInputs.clear(chatId);
             addressSessions.clear(chatId);
-            shiftWizard.clear(chatId);
+            clearShiftFlows(chatId);
             sessions.put(chatId, new BotSession(r.userId(), r.displayName()));
             execute(SendMessage.builder()
                     .chatId(chatId)

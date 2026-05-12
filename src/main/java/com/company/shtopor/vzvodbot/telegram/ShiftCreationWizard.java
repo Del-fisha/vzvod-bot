@@ -6,6 +6,7 @@ import com.company.shtopor.vzvodbot.core.CoreProfileClient;
 import com.company.shtopor.vzvodbot.session.AddressEditSessionStore;
 import com.company.shtopor.vzvodbot.session.ShiftDraftSession;
 import com.company.shtopor.vzvodbot.session.ShiftDraftSessionStore;
+import com.company.shtopor.vzvodbot.session.ShiftEndAwaitingStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -63,15 +64,18 @@ public class ShiftCreationWizard {
     private final ShiftDraftSessionStore store;
     private final CoreProfileClient coreProfileClient;
     private final AddressEditSessionStore addressSessions;
+    private final ShiftEndAwaitingStore shiftEndAwaitingStore;
 
     public ShiftCreationWizard(
             ShiftDraftSessionStore store,
             CoreProfileClient coreProfileClient,
-            AddressEditSessionStore addressSessions
+            AddressEditSessionStore addressSessions,
+            ShiftEndAwaitingStore shiftEndAwaitingStore
     ) {
         this.store = store;
         this.coreProfileClient = coreProfileClient;
         this.addressSessions = addressSessions;
+        this.shiftEndAwaitingStore = shiftEndAwaitingStore;
     }
 
     public boolean isActive(long chatId) {
@@ -364,6 +368,7 @@ public class ShiftCreationWizard {
     }
 
     public void startWizard(TelegramLongPollingBot bot, long chatId) throws TelegramApiException {
+        shiftEndAwaitingStore.clear(chatId);
         ShiftDraftSession s = new ShiftDraftSession();
         s.setStep(0);
         store.put(chatId, s);

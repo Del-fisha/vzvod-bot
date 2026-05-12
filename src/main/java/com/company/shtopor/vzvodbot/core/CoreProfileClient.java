@@ -110,6 +110,20 @@ public class CoreProfileClient {
         }
     }
 
+    public BotShiftItemDto setShiftEndTime(long telegramChatId, java.util.UUID shiftId, BotShiftEndTimeRequestDto body) {
+        try {
+            return restClient.post()
+                    .uri("/api/bot/me/shifts/{id}/end-time", shiftId)
+                    .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(BotShiftItemDto.class);
+        } catch (RestClientResponseException e) {
+            throw new CoreProfileException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        }
+    }
+
     public static final class CoreProfileException extends RuntimeException {
         private final int status;
 
