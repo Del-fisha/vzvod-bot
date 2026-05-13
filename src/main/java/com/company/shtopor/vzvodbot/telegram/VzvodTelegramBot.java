@@ -81,6 +81,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private final AddressEditSessionStore addressSessions;
     private final ShiftCreationWizard shiftWizard;
     private final ShiftEndTimeHandler shiftEndTimeHandler;
+    private final ShiftQuickEditHandler shiftQuickEditHandler;
 
     public VzvodTelegramBot(
             TelegramBotProperties telegramProps,
@@ -90,7 +91,8 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             PendingBotInputRegistry pendingInputs,
             AddressEditSessionStore addressSessions,
             ShiftCreationWizard shiftWizard,
-            ShiftEndTimeHandler shiftEndTimeHandler
+            ShiftEndTimeHandler shiftEndTimeHandler,
+            ShiftQuickEditHandler shiftQuickEditHandler
     ) {
         super(buildBotOptions(telegramProps));
         this.telegramProps = telegramProps;
@@ -101,11 +103,13 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         this.addressSessions = addressSessions;
         this.shiftWizard = shiftWizard;
         this.shiftEndTimeHandler = shiftEndTimeHandler;
+        this.shiftQuickEditHandler = shiftQuickEditHandler;
     }
 
     private void clearShiftFlows(long chatId) {
         shiftWizard.clear(chatId);
         shiftEndTimeHandler.clearAwaiting(chatId);
+        shiftQuickEditHandler.clear(chatId);
     }
 
     private static DefaultBotOptions buildBotOptions(TelegramBotProperties p) {
@@ -191,6 +195,9 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                 if (shiftEndTimeHandler.handleText(this, chatId, text)) {
                     return;
                 }
+                if (shiftQuickEditHandler.handleText(this, chatId, text)) {
+                    return;
+                }
                 PendingBotInput pending = pendingInputs.get(chatId).orElse(null);
                 if (pending == PendingBotInput.BREASTPLATE && !text.startsWith("/")) {
                     handleBreastplateText(chatId, text);
@@ -241,6 +248,22 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             shiftWizard.onBack(this, chatId);
             return;
         }
+        if (shiftQuickEditHandler.clearIfAwaitingDate(chatId)) {
+            execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text("Изменение даты отменено.")
+                    .replyMarkup(mainMenuKeyboard())
+                    .build());
+            return;
+        }
+        if (shiftQuickEditHandler.clearIfPartnerPick(chatId)) {
+            execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text("Выбор напарника отменён.")
+                    .replyMarkup(mainMenuKeyboard())
+                    .build());
+            return;
+        }
         if (shiftEndTimeHandler.clearAwaitingIfPresent(chatId)) {
             execute(SendMessage.builder()
                     .chatId(chatId)
@@ -283,9 +306,17 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             List<List<InlineKeyboardButton>> rows = new ArrayList<>();
             rows.add(List.of(ib("➕ Новая смена", ShiftCreationWizard.CB_SHIFT_NEW)));
             for (BotShiftItemDto it : items) {
-                if (it.id() != null && it.endTime() == null) {
-                    String shortDate = it.date() != null ? it.date().format(DATE_RU) : "?";
-                    rows.add(List.of(ib("Завершить · " + shortDate, ShiftEndTimeHandler.PREFIX_END_PICK + "|" + it.id())));
+                if (it.id() == null) {
+                    continue;
+                }
+                String shortDate = it.date() != null ? it.date().format(DATE_RU) : "?";
+                List<InlineKeyboardButton> row = new ArrayList<>();
+                if (it.endTime() == null) {
+                    row.add(ib("Завершить · " + shortDate, ShiftEndTimeHandler.PREFIX_END_PICK + "|" + it.id()));
+                    row.add(ib("Изменить · " + shortDate, ShiftQuickEditHandler.PREFIX_EDIT_MENU + "|" + it.id()));
+                }
+                if (!row.isEmpty()) {
+                    rows.add(row);
                 }
             }
             execute(SendMessage.builder()
@@ -471,6 +502,13 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             return;
         }
         if (shiftEndTimeHandler.handleCallback(this, chatId, data, cqId)) {
+            return;
+        }
+        if (shiftWizard.isActive(chatId) && shiftQuickEditHandler.isQuickEditCallback(data)) {
+            answerCallback(cqId);
+            return;
+        }
+        if (shiftQuickEditHandler.handleCallback(this, chatId, data, cqId)) {
             return;
         }
 

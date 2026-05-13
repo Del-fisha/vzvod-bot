@@ -22,9 +22,11 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -48,6 +50,11 @@ public class ShiftCreationWizard {
     private static final String PREFIX_SHIFT_TSTART = "sds";
     private static final String CB_SHIFT_SUBMIT = "sdok";
     private static final String CB_SHIFT_ABORT = "sdno";
+    private static final String CB_SHIFT_ADD_PARTNER = "sdap";
+    private static final String PREFIX_SHIFT_ADD_DEPT = "sadd";
+    private static final String PREFIX_SHIFT_ADD_COL = "sdac";
+    private static final String PREFIX_SHIFT_ADD_PAGE = "sdan";
+    private static final String CB_SHIFT_ADD_PARTNER_CANCEL = "sdax";
 
     private static final String[] SHIFT_ROUTE_IDS = {
             "МП 28", "МП 30", "МП 31", "МП 32", "МП 5", "МП 6", "СП 3", "СП 18", "Another"
@@ -92,6 +99,18 @@ public class ShiftCreationWizard {
             return;
         }
         ShiftDraftSession s = opt.get();
+        if (s.getStep() == 6 && s.getConfirmPartnerPicker() != ShiftDraftSession.ConfirmPartnerPicker.IDLE) {
+            if (s.getConfirmPartnerPicker() == ShiftDraftSession.ConfirmPartnerPicker.COLLEAGUE) {
+                s.setConfirmPartnerPicker(ShiftDraftSession.ConfirmPartnerPicker.DEPARTMENT);
+                store.put(chatId, s);
+                sendConfirmAddPartnerDeptStep(bot, chatId);
+                return;
+            }
+            s.setConfirmPartnerPicker(ShiftDraftSession.ConfirmPartnerPicker.IDLE);
+            store.put(chatId, s);
+            sendConfirm(bot, chatId, s);
+            return;
+        }
         if (s.getStep() <= 0) {
             store.clear(chatId);
             bot.execute(SendMessage.builder()
@@ -103,20 +122,14 @@ public class ShiftCreationWizard {
         int was = s.getStep();
         s.setStep(was - 1);
         switch (was) {
-            case 5 -> {
-                s.setStartTime(null);
-                s.setPartnerServiceInfoId(null);
-                s.setPartnerLabel(null);
-            }
+            case 5 -> s.setStartTime(null);
             case 4 -> {
-                s.setPartnerServiceInfoId(null);
-                s.setPartnerLabel(null);
+                s.clearParticipants();
                 s.setColleaguePage(0);
             }
             case 3 -> {
                 s.setPartnerDepartment(null);
-                s.setPartnerServiceInfoId(null);
-                s.setPartnerLabel(null);
+                s.clearParticipants();
                 s.setColleaguePage(0);
             }
             default -> {
@@ -202,7 +215,12 @@ public class ShiftCreationWizard {
                     || data.startsWith(PREFIX_SHIFT_COLPAGE + "|")
                     || data.startsWith(PREFIX_SHIFT_TSTART + "|")
                     || CB_SHIFT_SUBMIT.equals(data)
-                    || CB_SHIFT_ABORT.equals(data)) {
+                    || CB_SHIFT_ABORT.equals(data)
+                    || CB_SHIFT_ADD_PARTNER.equals(data)
+                    || data.startsWith(PREFIX_SHIFT_ADD_DEPT + "|")
+                    || data.startsWith(PREFIX_SHIFT_ADD_COL + "|")
+                    || data.startsWith(PREFIX_SHIFT_ADD_PAGE + "|")
+                    || CB_SHIFT_ADD_PARTNER_CANCEL.equals(data)) {
                 answer(bot, cqId);
                 return true;
             }
@@ -217,10 +235,102 @@ public class ShiftCreationWizard {
         }
         if (CB_SHIFT_SUBMIT.equals(data)) {
             answer(bot, cqId);
-            if (s.getStep() != 6) {
+            if (s.getStep() != 6 || s.getConfirmPartnerPicker() != ShiftDraftSession.ConfirmPartnerPicker.IDLE) {
                 return true;
             }
             submit(bot, chatId, s);
+            return true;
+        }
+        if (CB_SHIFT_ADD_PARTNER.equals(data)) {
+            answer(bot, cqId);
+            if (s.getStep() != 6) {
+                return true;
+            }
+            s.setConfirmPartnerPicker(ShiftDraftSession.ConfirmPartnerPicker.DEPARTMENT);
+            s.setColleaguePage(0);
+            store.put(chatId, s);
+            sendConfirmAddPartnerDeptStep(bot, chatId);
+            return true;
+        }
+        if (CB_SHIFT_ADD_PARTNER_CANCEL.equals(data)) {
+            answer(bot, cqId);
+            if (s.getStep() != 6) {
+                return true;
+            }
+            s.setConfirmPartnerPicker(ShiftDraftSession.ConfirmPartnerPicker.IDLE);
+            store.put(chatId, s);
+            sendConfirm(bot, chatId, s);
+            return true;
+        }
+        if (data.startsWith(PREFIX_SHIFT_ADD_DEPT + "|")) {
+            answer(bot, cqId);
+            if (s.getStep() != 6
+                    || s.getConfirmPartnerPicker() != ShiftDraftSession.ConfirmPartnerPicker.DEPARTMENT) {
+                return true;
+            }
+            try {
+                int dep = Integer.parseInt(data.substring((PREFIX_SHIFT_ADD_DEPT + "|").length()));
+                if (dep != 1 && dep != 2) {
+                    return true;
+                }
+                s.setPartnerDepartment(dep);
+                s.setColleaguePage(0);
+                s.setConfirmPartnerPicker(ShiftDraftSession.ConfirmPartnerPicker.COLLEAGUE);
+                store.put(chatId, s);
+                sendConfirmAddPartnerColleagueStep(bot, chatId, s);
+            } catch (NumberFormatException e) {
+                log.debug("bad sadd {}", data);
+            }
+            return true;
+        }
+        if (data.startsWith(PREFIX_SHIFT_ADD_PAGE + "|")) {
+            answer(bot, cqId);
+            if (s.getStep() != 6
+                    || s.getConfirmPartnerPicker() != ShiftDraftSession.ConfirmPartnerPicker.COLLEAGUE) {
+                return true;
+            }
+            String[] p = data.split("\\|");
+            if (p.length != 3) {
+                return true;
+            }
+            try {
+                int dep = Integer.parseInt(p[1]);
+                int page = Integer.parseInt(p[2]);
+                if ((dep != 1 && dep != 2) || page < 0) {
+                    return true;
+                }
+                s.setPartnerDepartment(dep);
+                s.setColleaguePage(page);
+                store.put(chatId, s);
+                sendConfirmAddPartnerColleagueStep(bot, chatId, s);
+            } catch (NumberFormatException e) {
+                log.debug("bad sdan {}", data);
+            }
+            return true;
+        }
+        if (data.startsWith(PREFIX_SHIFT_ADD_COL + "|")) {
+            answer(bot, cqId);
+            if (s.getStep() != 6
+                    || s.getConfirmPartnerPicker() != ShiftDraftSession.ConfirmPartnerPicker.COLLEAGUE) {
+                return true;
+            }
+            try {
+                UUID id = UUID.fromString(data.substring((PREFIX_SHIFT_ADD_COL + "|").length()));
+                if (s.hasParticipant(id)) {
+                    bot.execute(SendMessage.builder()
+                            .chatId(chatId)
+                            .text("Этот сотрудник уже указан в смене.")
+                            .build());
+                    return true;
+                }
+                String label = resolveColleagueLabel(chatId, s.getPartnerDepartment(), s.getColleaguePage(), id);
+                s.addParticipant(id, label, s.getPartnerDepartment());
+                s.setConfirmPartnerPicker(ShiftDraftSession.ConfirmPartnerPicker.IDLE);
+                store.put(chatId, s);
+                sendConfirm(bot, chatId, s);
+            } catch (IllegalArgumentException e) {
+                log.debug("bad sdac {}", data);
+            }
             return true;
         }
         if (data.startsWith(PREFIX_SHIFT_DATE + "|")) {
@@ -284,8 +394,7 @@ public class ShiftCreationWizard {
                 }
                 s.setPartnerDepartment(dep);
                 s.setColleaguePage(0);
-                s.setPartnerServiceInfoId(null);
-                s.setPartnerLabel(null);
+                s.clearParticipants();
                 s.setStep(4);
                 store.put(chatId, s);
                 sendColleagueStep(bot, chatId, s);
@@ -325,22 +434,8 @@ public class ShiftCreationWizard {
             }
             try {
                 UUID id = UUID.fromString(data.substring((PREFIX_SHIFT_COLLEAGUE + "|").length()));
-                String label = "—";
-                try {
-                    var resp = coreProfileClient.getColleagues(chatId, s.getPartnerDepartment(), s.getColleaguePage());
-                    if (resp.items() != null) {
-                        for (BotColleagueItemDto it : resp.items()) {
-                            if (id.equals(it.serviceInfoId()) && it.label() != null && !it.label().isBlank()) {
-                                label = it.label();
-                                break;
-                            }
-                        }
-                    }
-                } catch (CoreProfileClient.CoreProfileException e) {
-                    log.debug("colleague label fetch chatId={} status={}", chatId, e.getStatus());
-                }
-                s.setPartnerServiceInfoId(id);
-                s.setPartnerLabel(label);
+                String label = resolveColleagueLabel(chatId, s.getPartnerDepartment(), s.getColleaguePage(), id);
+                s.setPrimaryParticipant(id, label, s.getPartnerDepartment());
                 s.setStep(5);
                 store.put(chatId, s);
                 sendStartTimeStep(bot, chatId);
@@ -493,12 +588,113 @@ public class ShiftCreationWizard {
                 .build());
     }
 
+    private void sendConfirmAddPartnerDeptStep(TelegramLongPollingBot bot, long chatId) throws TelegramApiException {
+        List<List<InlineKeyboardButton>> rows = List.of(
+                List.of(
+                        ib("Отделение 1", PREFIX_SHIFT_ADD_DEPT + "|1"),
+                        ib("Отделение 2", PREFIX_SHIFT_ADD_DEPT + "|2")),
+                List.of(ib("К подтверждению", CB_SHIFT_ADD_PARTNER_CANCEL)));
+        bot.execute(SendMessage.builder()
+                .chatId(chatId)
+                .text("Добавить напарника: выберите отделение.")
+                .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
+                .build());
+    }
+
+    private void sendConfirmAddPartnerColleagueStep(TelegramLongPollingBot bot, long chatId, ShiftDraftSession s)
+            throws TelegramApiException {
+        Integer dept = s.getPartnerDepartment();
+        if (dept == null) {
+            sendConfirmAddPartnerDeptStep(bot, chatId);
+            return;
+        }
+        Set<UUID> alreadyInShift = participantsToExclude(s);
+        try {
+            var resp = coreProfileClient.getColleagues(chatId, dept, s.getColleaguePage());
+            List<BotColleagueItemDto> items = resp.items() == null ? List.of() : resp.items();
+            if (items.isEmpty()) {
+                bot.execute(SendMessage.builder()
+                        .chatId(chatId)
+                        .text("В выбранном отделении нет других сотрудников в строю. Выберите другое отделение.")
+                        .build());
+                return;
+            }
+            List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+            boolean anyPickable = false;
+            for (BotColleagueItemDto it : items) {
+                if (it.serviceInfoId() == null || alreadyInShift.contains(it.serviceInfoId())) {
+                    continue;
+                }
+                String label = it.label() == null || it.label().isBlank() ? "Сотрудник" : it.label();
+                rows.add(List.of(ib(label, PREFIX_SHIFT_ADD_COL + "|" + it.serviceInfoId())));
+                anyPickable = true;
+            }
+            if (resp.hasMore()) {
+                int next = s.getColleaguePage() + 1;
+                rows.add(List.of(ib("Ещё…", PREFIX_SHIFT_ADD_PAGE + "|" + dept + "|" + next)));
+            }
+            rows.add(List.of(ib("К подтверждению", CB_SHIFT_ADD_PARTNER_CANCEL)));
+            String intro = "Добавить напарника (отделение " + dept + "). Уже в смене не показываются.";
+            if (!anyPickable) {
+                String hint = resp.hasMore()
+                        ? "На этой странице все в списке уже участвуют в смене — нажмите «Ещё…» или выберите другое отделение."
+                        : "В этом отделении больше некого добавить (остальные уже в смене).";
+                bot.execute(SendMessage.builder()
+                        .chatId(chatId)
+                        .text(intro + "\n\n" + hint)
+                        .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
+                        .build());
+                return;
+            }
+            bot.execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text(intro)
+                    .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
+                    .build());
+        } catch (CoreProfileClient.CoreProfileException e) {
+            bot.execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text(profileErrorHint(e.getStatus()))
+                    .build());
+        }
+    }
+
+    private static Set<UUID> participantsToExclude(ShiftDraftSession s) {
+        Set<UUID> out = new HashSet<>();
+        for (ShiftDraftSession.DraftParticipant p : s.getParticipants()) {
+            if (p.serviceInfoId() != null) {
+                out.add(p.serviceInfoId());
+            }
+        }
+        return out;
+    }
+
+    private String resolveColleagueLabel(long chatId, Integer dept, int page, UUID serviceInfoId) {
+        if (dept == null) {
+            return "—";
+        }
+        try {
+            var resp = coreProfileClient.getColleagues(chatId, dept, page);
+            if (resp.items() != null) {
+                for (BotColleagueItemDto it : resp.items()) {
+                    if (serviceInfoId.equals(it.serviceInfoId()) && it.label() != null && !it.label().isBlank()) {
+                        return it.label();
+                    }
+                }
+            }
+        } catch (CoreProfileClient.CoreProfileException e) {
+            log.debug("colleague label fetch chatId={} status={}", chatId, e.getStatus());
+        }
+        return "—";
+    }
+
     private void sendConfirm(TelegramLongPollingBot bot, long chatId, ShiftDraftSession s) throws TelegramApiException {
         String d = s.getDate() != null ? s.getDate().format(DATE_RU) : "—";
         String t0 = s.getStartTime() != null ? s.getStartTime().format(TIME_SHORT) : "—";
         String partnerLine = partnerConfirmLine(s);
-        List<List<InlineKeyboardButton>> rows = List.of(
-                List.of(ib("Сохранить в Core", CB_SHIFT_SUBMIT), ib("Отмена", CB_SHIFT_ABORT)));
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(List.of(ib("Сохранить в Core", CB_SHIFT_SUBMIT), ib("Отмена", CB_SHIFT_ABORT)));
+        rows.add(List.of(ib("Добавить напарника", CB_SHIFT_ADD_PARTNER)));
         bot.execute(SendMessage.builder()
                 .chatId(chatId)
                 .text("Проверьте и сохраните:\n"
@@ -513,15 +709,25 @@ public class ShiftCreationWizard {
     }
 
     private static String partnerConfirmLine(ShiftDraftSession s) {
-        Integer dep = s.getPartnerDepartment();
-        if (s.getPartnerServiceInfoId() == null || dep == null) {
-            return "• Напарник: —";
+        List<ShiftDraftSession.DraftParticipant> participants = s.getParticipants();
+        if (participants.isEmpty()) {
+            return "• Напарники: —";
         }
-        String lbl = s.getPartnerLabel();
-        if (lbl == null || lbl.isBlank()) {
-            lbl = "—";
+        if (participants.size() == 1) {
+            ShiftDraftSession.DraftParticipant p = participants.get(0);
+            String lbl = p.label() == null || p.label().isBlank() ? "—" : p.label();
+            Integer dep = p.department();
+            String depPart = dep == null ? "" : " (отд. " + dep + ")";
+            return "• Напарник: " + lbl + depPart;
         }
-        return "• Напарник: " + lbl + " (отд. " + dep + ")";
+        StringBuilder sb = new StringBuilder("• Напарники:");
+        for (ShiftDraftSession.DraftParticipant p : participants) {
+            String lbl = p.label() == null || p.label().isBlank() ? "—" : p.label();
+            Integer dep = p.department();
+            String depPart = dep == null ? "" : " (отд. " + dep + ")";
+            sb.append("\n  — ").append(lbl).append(depPart);
+        }
+        return sb.toString();
     }
 
     private static String humanRoute(String id) {
@@ -551,19 +757,36 @@ public class ShiftCreationWizard {
             bot.execute(SendMessage.builder().chatId(chatId).text("Заполните все шаги мастера.").build());
             return;
         }
+        List<ShiftDraftSession.DraftParticipant> participants = s.getParticipants();
         BotShiftUpsertRequestDto body = new BotShiftUpsertRequestDto(
                 s.getDate(),
                 s.getRouteId(),
                 s.getTypeOfShiftId(),
                 s.getStartTime(),
                 null,
-                s.getPartnerServiceInfoId(),
+                participants.get(0).serviceInfoId(),
                 null,
                 null,
                 null,
                 null);
         try {
             var saved = coreProfileClient.createShift(chatId, body);
+            UUID shiftId = saved.id();
+            for (int i = 1; i < participants.size(); i++) {
+                ShiftDraftSession.DraftParticipant extra = participants.get(i);
+                BotShiftUpsertRequestDto addBody = new BotShiftUpsertRequestDto(
+                        saved.date(),
+                        saved.route(),
+                        saved.typeOfShiftId(),
+                        saved.startTime(),
+                        saved.endTime(),
+                        extra.serviceInfoId(),
+                        saved.countOfStatements(),
+                        saved.countOfClaims(),
+                        saved.ibdWithMigrant(),
+                        saved.ibdWithoutMigrant());
+                saved = coreProfileClient.updateShift(chatId, shiftId, addBody);
+            }
             store.clear(chatId);
             String t0 = saved.startTime() != null ? saved.startTime().format(TIME_SHORT) : "—";
             String endPart = saved.endTime() != null

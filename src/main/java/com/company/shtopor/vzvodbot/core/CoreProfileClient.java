@@ -58,6 +58,18 @@ public class CoreProfileClient {
         }
     }
 
+    public BotShiftItemDto getShift(long telegramChatId, java.util.UUID shiftId) {
+        try {
+            return restClient.get()
+                    .uri("/api/bot/me/shifts/{id}", shiftId)
+                    .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
+                    .retrieve()
+                    .body(BotShiftItemDto.class);
+        } catch (RestClientResponseException e) {
+            throw new CoreProfileException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        }
+    }
+
     public BotVacationsResponseDto getVacations(long telegramChatId) {
         try {
             return restClient.get()

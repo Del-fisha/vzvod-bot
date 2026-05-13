@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.List;
 import java.util.UUID;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -12,8 +13,15 @@ public record BotShiftItemDto(
         LocalDate date,
         String route,
         String shiftType,
+        String typeOfShiftId,
         String departmentToday,
         LocalTime startTime,
-        LocalTime endTime
+        LocalTime endTime,
+        Integer countOfStatements,
+        Integer countOfClaims,
+        Integer ibdWithMigrant,
+        Integer ibdWithoutMigrant,
+        UUID partnerServiceInfoId,
+        List<UUID> otherParticipantServiceInfoIds
 ) {
 }

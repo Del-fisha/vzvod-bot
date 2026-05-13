@@ -2,6 +2,8 @@ package com.company.shtopor.vzvodbot.session;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -9,15 +11,24 @@ import java.util.UUID;
  */
 public class ShiftDraftSession {
 
+    public enum ConfirmPartnerPicker {
+        IDLE,
+        DEPARTMENT,
+        COLLEAGUE
+    }
+
+    public record DraftParticipant(UUID serviceInfoId, String label, Integer department) {
+    }
+
     private int step;
     private LocalDate date;
     private String routeId;
     private String typeOfShiftId;
     private Integer partnerDepartment;
     private int colleaguePage;
-    private UUID partnerServiceInfoId;
-    private String partnerLabel;
+    private final List<DraftParticipant> participants = new ArrayList<>();
     private LocalTime startTime;
+    private ConfirmPartnerPicker confirmPartnerPicker = ConfirmPartnerPicker.IDLE;
 
     public int getStep() {
         return step;
@@ -67,20 +78,47 @@ public class ShiftDraftSession {
         this.colleaguePage = colleaguePage;
     }
 
-    public UUID getPartnerServiceInfoId() {
-        return partnerServiceInfoId;
+    public List<DraftParticipant> getParticipants() {
+        return List.copyOf(participants);
     }
 
-    public void setPartnerServiceInfoId(UUID partnerServiceInfoId) {
-        this.partnerServiceInfoId = partnerServiceInfoId;
+    public void clearParticipants() {
+        participants.clear();
+    }
+
+    public boolean hasParticipant(UUID serviceInfoId) {
+        if (serviceInfoId == null) {
+            return false;
+        }
+        for (DraftParticipant p : participants) {
+            if (serviceInfoId.equals(p.serviceInfoId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void setPrimaryParticipant(UUID serviceInfoId, String label, Integer department) {
+        participants.clear();
+        if (serviceInfoId != null) {
+            participants.add(new DraftParticipant(serviceInfoId, label, department));
+        }
+    }
+
+    public boolean addParticipant(UUID serviceInfoId, String label, Integer department) {
+        if (serviceInfoId == null || hasParticipant(serviceInfoId)) {
+            return false;
+        }
+        participants.add(new DraftParticipant(serviceInfoId, label, department));
+        return true;
+    }
+
+    public UUID getPartnerServiceInfoId() {
+        return participants.isEmpty() ? null : participants.get(0).serviceInfoId();
     }
 
     public String getPartnerLabel() {
-        return partnerLabel;
-    }
-
-    public void setPartnerLabel(String partnerLabel) {
-        this.partnerLabel = partnerLabel;
+        return participants.isEmpty() ? null : participants.get(0).label();
     }
 
     public LocalTime getStartTime() {
@@ -91,11 +129,19 @@ public class ShiftDraftSession {
         this.startTime = startTime;
     }
 
+    public ConfirmPartnerPicker getConfirmPartnerPicker() {
+        return confirmPartnerPicker;
+    }
+
+    public void setConfirmPartnerPicker(ConfirmPartnerPicker confirmPartnerPicker) {
+        this.confirmPartnerPicker = confirmPartnerPicker == null ? ConfirmPartnerPicker.IDLE : confirmPartnerPicker;
+    }
+
     public boolean isReadyToSubmit() {
         return date != null
                 && routeId != null
                 && typeOfShiftId != null
-                && partnerServiceInfoId != null
+                && !participants.isEmpty()
                 && startTime != null;
     }
 }
