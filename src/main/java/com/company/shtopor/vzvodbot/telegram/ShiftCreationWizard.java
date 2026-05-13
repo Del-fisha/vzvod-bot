@@ -198,7 +198,7 @@ public class ShiftCreationWizard {
             if (addressSessions.get(chatId).isPresent()) {
                 bot.execute(SendMessage.builder()
                         .chatId(chatId)
-                        .text("Сначала завершите редактирование адреса (или нажмите «Назад» / главное меню).")
+                        .text("Сначала завершите редактирование адреса (или нажмите «Назад»).")
                         .build());
                 return true;
             }

@@ -40,15 +40,18 @@ public class ViolationCreationWizard {
     private final ViolationDraftSessionStore store;
     private final CoreProfileClient coreProfileClient;
     private final ShiftMetricsHandler shiftMetricsHandler;
+    private final MainMenuKeyboardFactory mainMenuKeyboardFactory;
 
     public ViolationCreationWizard(
             ViolationDraftSessionStore store,
             CoreProfileClient coreProfileClient,
-            ShiftMetricsHandler shiftMetricsHandler
+            ShiftMetricsHandler shiftMetricsHandler,
+            MainMenuKeyboardFactory mainMenuKeyboardFactory
     ) {
         this.store = store;
         this.coreProfileClient = coreProfileClient;
         this.shiftMetricsHandler = shiftMetricsHandler;
+        this.mainMenuKeyboardFactory = mainMenuKeyboardFactory;
     }
 
     public boolean isActive(long chatId) {
@@ -223,12 +226,14 @@ public class ViolationCreationWizard {
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
                     .text(kindLabel + " сохранено.\n" + ShiftMetricsHandler.formatOpenShiftSummary(saved))
+                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
             clear(chatId);
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
                     .text(e.userHint())
+                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
                     .build());
         } catch (Exception e) {
             clear(chatId);
@@ -236,6 +241,7 @@ public class ViolationCreationWizard {
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
                     .text("Не удалось сохранить нарушение (Core).")
+                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
                     .build());
         }
     }

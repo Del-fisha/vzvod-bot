@@ -38,10 +38,16 @@ public class ShiftEndTimeHandler {
 
     private final CoreProfileClient coreProfileClient;
     private final ShiftEndAwaitingStore awaitingStore;
+    private final MainMenuKeyboardFactory mainMenuKeyboardFactory;
 
-    public ShiftEndTimeHandler(CoreProfileClient coreProfileClient, ShiftEndAwaitingStore awaitingStore) {
+    public ShiftEndTimeHandler(
+            CoreProfileClient coreProfileClient,
+            ShiftEndAwaitingStore awaitingStore,
+            MainMenuKeyboardFactory mainMenuKeyboardFactory
+    ) {
         this.coreProfileClient = coreProfileClient;
         this.awaitingStore = awaitingStore;
+        this.mainMenuKeyboardFactory = mainMenuKeyboardFactory;
     }
 
     public void clearAwaiting(long chatId) {
@@ -162,12 +168,14 @@ public class ShiftEndTimeHandler {
                     .text("Смена завершена в учёте: "
                             + (saved.date() != null ? saved.date().format(DATE_RU) : "—")
                             + " · с " + t0 + " по " + t1)
+                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
             awaitingStore.clear(chatId);
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
                     .text(endTimeErrorHint(e.getStatus()))
+                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
                     .build());
         }
     }

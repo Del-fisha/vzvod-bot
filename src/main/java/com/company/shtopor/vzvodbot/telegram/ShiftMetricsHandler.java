@@ -62,6 +62,10 @@ public class ShiftMetricsHandler {
 
     static final String BTN_IBD_DEC = "ИБДР −";
 
+    static final String BTN_STMT_INC = "Заявки +";
+
+    static final String BTN_STMT_DEC = "Заявки −";
+
 
 
     private static final DateTimeFormatter DATE_RU = DateTimeFormatter.ofPattern("dd.MM.yyyy", Locale.forLanguageTag("ru-RU"));
@@ -119,6 +123,12 @@ public class ShiftMetricsHandler {
                 KeyboardButton.builder().text(BTN_IBD_INC).build(),
 
                 KeyboardButton.builder().text(BTN_IBD_DEC).build())));
+
+        rows.add(new KeyboardRow(List.of(
+
+                KeyboardButton.builder().text(BTN_STMT_INC).build(),
+
+                KeyboardButton.builder().text(BTN_STMT_DEC).build())));
 
         rows.add(new KeyboardRow(List.of(KeyboardButton.builder().text(ViolationCreationWizard.BTN_ADMIN).build())));
 
@@ -180,6 +190,10 @@ public class ShiftMetricsHandler {
 
                 case IBD_DEC -> coreProfileClient.adjustIbdWithMigrant(chatId, shiftId, new BotShiftMetricDeltaRequestDto(-1));
 
+                case STMT_INC -> coreProfileClient.adjustCountOfStatements(chatId, shiftId, new BotShiftMetricDeltaRequestDto(1));
+
+                case STMT_DEC -> coreProfileClient.adjustCountOfStatements(chatId, shiftId, new BotShiftMetricDeltaRequestDto(-1));
+
             };
 
             bot.execute(SendMessage.builder()
@@ -232,11 +246,13 @@ public class ShiftMetricsHandler {
 
         int ibd = shift.ibdWithMigrant() != null ? shift.ibdWithMigrant() : 0;
 
+        int statements = shift.countOfStatements() != null ? shift.countOfStatements() : 0;
+
         int admin = shift.administrativeViolationsCount() != null ? shift.administrativeViolationsCount() : 0;
 
         int criminal = shift.criminalViolationsCount() != null ? shift.criminalViolationsCount() : 0;
 
-        return "Открытая смена " + date + ": ИБДР " + ibd + ", адм. " + admin + ", уголов. " + criminal;
+        return "Открытая смена " + date + ": ИБДР " + ibd + ", заявки " + statements + ", адм. " + admin + ", уголов. " + criminal;
 
     }
 
@@ -253,6 +269,18 @@ public class ShiftMetricsHandler {
         if (BTN_IBD_DEC.equals(text)) {
 
             return MetricAction.IBD_DEC;
+
+        }
+
+        if (BTN_STMT_INC.equals(text)) {
+
+            return MetricAction.STMT_INC;
+
+        }
+
+        if (BTN_STMT_DEC.equals(text)) {
+
+            return MetricAction.STMT_DEC;
 
         }
 
@@ -288,7 +316,11 @@ public class ShiftMetricsHandler {
 
         IBD_INC,
 
-        IBD_DEC
+        IBD_DEC,
+
+        STMT_INC,
+
+        STMT_DEC
 
     }
 

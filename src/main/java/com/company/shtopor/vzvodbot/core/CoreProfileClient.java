@@ -107,6 +107,15 @@ public class CoreProfileClient {
                 .body(body), BotShiftItemDto.class);
     }
 
+    public BotShiftItemDto adjustCountOfStatements(long telegramChatId, java.util.UUID shiftId,
+                                                   BotShiftMetricDeltaRequestDto body) {
+        return jsonBody(restClient.post()
+                .uri("/api/bot/me/shifts/{id}/count-of-statements", shiftId)
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body), BotShiftItemDto.class);
+    }
+
     public BotViolationOptionsResponseDto getViolationOptions() {
         return jsonBody(restClient.get()
                 .uri("/api/bot/me/violation-options"), BotViolationOptionsResponseDto.class);
