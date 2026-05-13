@@ -133,7 +133,7 @@ public class ShiftQuickEditHandler {
             } catch (CoreProfileClient.CoreProfileException e) {
                 bot.execute(SendMessage.builder()
                         .chatId(chatId)
-                        .text(editErrorHint(e.getStatus()))
+                        .text(editErrorHint(e.getStatus(), e.getMessage()))
                         .build());
             }
             return true;
@@ -165,7 +165,7 @@ public class ShiftQuickEditHandler {
             } catch (CoreProfileClient.CoreProfileException e) {
                 bot.execute(SendMessage.builder()
                         .chatId(chatId)
-                        .text(editErrorHint(e.getStatus()))
+                        .text(editErrorHint(e.getStatus(), e.getMessage()))
                         .build());
             }
             return true;
@@ -225,7 +225,7 @@ public class ShiftQuickEditHandler {
             } catch (CoreProfileClient.CoreProfileException e) {
                 bot.execute(SendMessage.builder()
                         .chatId(chatId)
-                        .text(editErrorHint(e.getStatus()))
+                        .text(editErrorHint(e.getStatus(), e.getMessage()))
                         .build());
             }
             return true;
@@ -296,7 +296,7 @@ public class ShiftQuickEditHandler {
         } catch (CoreProfileClient.CoreProfileException e) {
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
-                    .text(editErrorHint(e.getStatus()))
+                    .text(editErrorHint(e.getStatus(), e.getMessage()))
                     .build());
             return;
         }
@@ -310,7 +310,7 @@ public class ShiftQuickEditHandler {
         }
         Set<UUID> alreadyInShift = participantsToExcludeFromPicker(shiftSnap);
         try {
-            var resp = coreProfileClient.getColleagues(chatId, dept, page);
+            var resp = coreProfileClient.getColleagues(chatId, dept, page, shiftId);
             List<BotColleagueItemDto> items = resp.items() == null ? List.of() : resp.items();
             if (items.isEmpty()) {
                 bot.execute(SendMessage.builder()
@@ -357,7 +357,7 @@ public class ShiftQuickEditHandler {
         } catch (CoreProfileClient.CoreProfileException e) {
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
-                    .text(editErrorHint(e.getStatus()))
+                    .text(editErrorHint(e.getStatus(), e.getMessage()))
                     .build());
         }
     }
@@ -386,7 +386,7 @@ public class ShiftQuickEditHandler {
         } catch (CoreProfileClient.CoreProfileException e) {
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
-                    .text(editErrorHint(e.getStatus()))
+                    .text(editErrorHint(e.getStatus(), e.getMessage()))
                     .build());
             return;
         }
@@ -463,7 +463,7 @@ public class ShiftQuickEditHandler {
             pendingStore.clear(chatId);
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
-                    .text(editErrorHint(e.getStatus()))
+                    .text(editErrorHint(e.getStatus(), e.getMessage()))
                     .build());
         }
     }
@@ -478,7 +478,10 @@ public class ShiftQuickEditHandler {
         return serviceInfoId.equals(dto.partnerServiceInfoId());
     }
 
-    private static String editErrorHint(int status) {
+    private static String editErrorHint(int status, String body) {
+        if (status == 400 && body != null && body.contains("open shift conflict")) {
+            return "Нельзя добавить: у сотрудника уже есть другая незавершённая смена.";
+        }
         return switch (status) {
             case 400 -> "Запрос отклонён: проверьте дату, время и выбранного напарника.";
             case 403 -> "Нет доступа к этой смене.";
@@ -486,6 +489,10 @@ public class ShiftQuickEditHandler {
             case 401 -> "Ошибка API-ключа к Core.";
             default -> "Ошибка запроса к Core (код " + status + ").";
         };
+    }
+
+    private static String editErrorHint(int status) {
+        return editErrorHint(status, null);
     }
 
     private static LocalTime parseHmDigits(String four) {

@@ -202,6 +202,13 @@ public class ShiftCreationWizard {
                         .build());
                 return true;
             }
+            if (hasOpenShift(chatId)) {
+                bot.execute(SendMessage.builder()
+                        .chatId(chatId)
+                        .text("У вас уже есть незавершённая смена. Сначала завершите её или дождитесь окончания в учёте.")
+                        .build());
+                return true;
+            }
             startWizard(bot, chatId);
             return true;
         }
@@ -570,7 +577,7 @@ public class ShiftCreationWizard {
         } catch (CoreProfileClient.CoreProfileException e) {
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
-                    .text(profileErrorHint(e.getStatus()))
+                    .text(profileErrorHint(e.getStatus(), e.getMessage()))
                     .build());
         }
     }
@@ -654,7 +661,7 @@ public class ShiftCreationWizard {
         } catch (CoreProfileClient.CoreProfileException e) {
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
-                    .text(profileErrorHint(e.getStatus()))
+                    .text(profileErrorHint(e.getStatus(), e.getMessage()))
                     .build());
         }
     }
@@ -801,7 +808,7 @@ public class ShiftCreationWizard {
         } catch (CoreProfileClient.CoreProfileException e) {
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
-                    .text(profileErrorHint(e.getStatus()))
+                    .text(profileErrorHint(e.getStatus(), e.getMessage()))
                     .build());
         } catch (Exception e) {
             log.error("create shift chatId={}", chatId, e);
@@ -816,13 +823,33 @@ public class ShiftCreationWizard {
         return x == null || x.isBlank() ? "—" : x;
     }
 
-    private static String profileErrorHint(int status) {
+    private static String profileErrorHint(int status, String body) {
+        if (status == 400 && body != null && body.contains("open shift conflict")) {
+            return "Нельзя: у вас или у выбранного напарника уже есть незавершённая смена.";
+        }
         return switch (status) {
             case 404 -> "Сначала войдите: /start и отправьте контакт.";
             case 403 -> "Доступ запрещён (не в строю).";
             case 401 -> "Ошибка API-ключа к Core. Обратитесь к администратору.";
             default -> "Ошибка запроса к Core (код " + status + ").";
         };
+    }
+
+    private static String profileErrorHint(int status) {
+        return profileErrorHint(status, null);
+    }
+
+    private boolean hasOpenShift(long chatId) {
+        try {
+            var resp = coreProfileClient.getShifts(chatId);
+            if (resp == null || resp.items() == null) {
+                return false;
+            }
+            return resp.items().stream().anyMatch(it -> it.endTime() == null);
+        } catch (CoreProfileClient.CoreProfileException e) {
+            log.debug("open shift check chatId={} status={}", chatId, e.getStatus());
+            return false;
+        }
     }
 
     private static LocalTime parseTimeHm(String v) {

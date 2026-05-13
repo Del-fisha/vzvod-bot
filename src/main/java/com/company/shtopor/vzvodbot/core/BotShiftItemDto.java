@@ -21,6 +21,8 @@ public record BotShiftItemDto(
         Integer countOfClaims,
         Integer ibdWithMigrant,
         Integer ibdWithoutMigrant,
+        Integer administrativeViolationsCount,
+        Integer criminalViolationsCount,
         UUID partnerServiceInfoId,
         List<UUID> otherParticipantServiceInfoIds
 ) {
