@@ -200,7 +200,7 @@ public class ShiftMetricsHandler {
 
                     .chatId(chatId)
 
-                    .text("Обновлено.\n" + formatOpenShiftSummary(saved))
+                    .text(formatShiftUpdatedMessage(saved))
 
                     .replyMarkup(keyboard)
 
@@ -253,6 +253,30 @@ public class ShiftMetricsHandler {
         int criminal = shift.criminalViolationsCount() != null ? shift.criminalViolationsCount() : 0;
 
         return "Открытая смена " + date + ": ИБДР " + ibd + ", заявки " + statements + ", адм. " + admin + ", уголов. " + criminal;
+
+    }
+
+    static String formatShiftUpdatedMessage(BotShiftItemDto shift) {
+
+        String date = shift.date() != null ? shift.date().format(DATE_RU) : "—";
+
+        int ibd = shift.ibdWithMigrant() != null ? shift.ibdWithMigrant() : 0;
+
+        int statements = shift.countOfStatements() != null ? shift.countOfStatements() : 0;
+
+        int admin = shift.administrativeViolationsCount() != null ? shift.administrativeViolationsCount() : 0;
+
+        int criminal = shift.criminalViolationsCount() != null ? shift.criminalViolationsCount() : 0;
+
+        return "Обновлена смена (" + date + "):\n"
+
+                + "\tИбд: " + ibd + "\n"
+
+                + "\tЗаявок: " + statements + "\n"
+
+                + "\tАдминистративка: " + admin + "\n"
+
+                + "\tУголовка: " + criminal;
 
     }
 
