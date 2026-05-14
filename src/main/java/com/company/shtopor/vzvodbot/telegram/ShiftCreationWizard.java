@@ -57,7 +57,7 @@ public class ShiftCreationWizard {
     private static final String CB_SHIFT_ADD_PARTNER_CANCEL = "sdax";
 
     private static final String[] SHIFT_ROUTE_IDS = {
-            "МП 28", "МП 30", "МП 31", "МП 32", "МП 5", "МП 6", "СП 3", "СП 18", "Another"
+            "МП 28", "МП 30", "МП 31", "МП 32", "МП 5", "МП 6", "СП 3", "СП 18", "Другое"
     };
 
     private static final String[] SHIFT_ROUTE_LABELS = {
@@ -741,7 +741,7 @@ public class ShiftCreationWizard {
         if (id == null) {
             return "—";
         }
-        if ("Another".equals(id)) {
+        if ("Другое".equals(id) || "Another".equals(id)) {
             return "Другое";
         }
         return id;
