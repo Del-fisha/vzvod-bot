@@ -18,6 +18,10 @@ telegram:
     proxy-port: ${TELEGRAM_BOT_PROXY_PORT:0}
     proxy-type: ${TELEGRAM_BOT_PROXY_TYPE:HTTP}
 
+internal:
+  api:
+    token: ${INTERNAL_API_TOKEN:}
+
 vzvod:
   core:
     # Jmix Core (профиль test-postgres по умолчанию слушает :8080).

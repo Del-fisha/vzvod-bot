@@ -55,6 +55,12 @@ public class CoreProfileClient {
                 .header("X-Telegram-Chat-Id", Long.toString(telegramChatId)), BotVacationsResponseDto.class);
     }
 
+    public BotEventsResponseDto getEvents(long telegramChatId) {
+        return jsonBody(restClient.get()
+                .uri("/api/bot/me/events")
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId)), BotEventsResponseDto.class);
+    }
+
     public BotColleaguesResponseDto getColleagues(long telegramChatId, int department, int page) {
         return getColleagues(telegramChatId, department, page, null);
     }

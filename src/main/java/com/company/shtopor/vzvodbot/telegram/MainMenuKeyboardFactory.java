@@ -11,10 +11,13 @@ import java.util.List;
 @Component
 public class MainMenuKeyboardFactory {
 
-    public static final String BTN_PROFILE = "📋 Профиль";
+    public static final String BTN_MENU = "☰ Меню";
     public static final String BTN_SHIFTS = "🔄 Смены";
-    public static final String BTN_VACATIONS = "🏖 Отпуска";
     public static final String BTN_BACK = "Назад";
+
+    public static final String CB_MENU_PROFILE = "menu_prof";
+    public static final String CB_MENU_VACATIONS = "menu_vac";
+    public static final String CB_MENU_EVENTS = "menu_ev";
 
     private final ShiftMetricsHandler shiftMetricsHandler;
 
@@ -25,9 +28,8 @@ public class MainMenuKeyboardFactory {
     public ReplyKeyboardMarkup build(long chatId) {
         List<KeyboardRow> rows = new ArrayList<>();
         rows.add(new KeyboardRow(List.of(
-                KeyboardButton.builder().text(BTN_PROFILE).build(),
-                KeyboardButton.builder().text(BTN_SHIFTS).build(),
-                KeyboardButton.builder().text(BTN_VACATIONS).build())));
+                KeyboardButton.builder().text(BTN_MENU).build(),
+                KeyboardButton.builder().text(BTN_SHIFTS).build())));
         shiftMetricsHandler.appendOpenShiftRows(chatId, rows);
         rows.add(new KeyboardRow(List.of(KeyboardButton.builder().text(BTN_BACK).build())));
         return ReplyKeyboardMarkup.builder()

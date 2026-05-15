@@ -3,6 +3,8 @@ package com.company.shtopor.vzvodbot.telegram;
 import com.company.shtopor.vzvodbot.config.TelegramBotProperties;
 import com.company.shtopor.vzvodbot.core.BotAddressDto;
 import com.company.shtopor.vzvodbot.core.BotAddressPatchDto;
+import com.company.shtopor.vzvodbot.core.BotEventItemDto;
+import com.company.shtopor.vzvodbot.core.BotEventsResponseDto;
 import com.company.shtopor.vzvodbot.core.BotProfileDto;
 import com.company.shtopor.vzvodbot.core.BotProfilePatchDto;
 import com.company.shtopor.vzvodbot.core.CoreAuthClient;
@@ -17,6 +19,7 @@ import com.company.shtopor.vzvodbot.session.AddressEditSessionStore;
 import com.company.shtopor.vzvodbot.session.BotSession;
 import com.company.shtopor.vzvodbot.session.PendingBotInput;
 import com.company.shtopor.vzvodbot.session.PendingBotInputRegistry;
+import com.company.shtopor.vzvodbot.session.TelegramBotSessionCleaner;
 import com.company.shtopor.vzvodbot.session.TelegramSessionRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,6 +82,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private final ShiftMetricsHandler shiftMetricsHandler;
     private final ViolationCreationWizard violationWizard;
     private final MainMenuKeyboardFactory mainMenuKeyboardFactory;
+    private final TelegramBotSessionCleaner sessionCleaner;
 
     public VzvodTelegramBot(
             TelegramBotProperties telegramProps,
@@ -92,7 +96,8 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             ShiftQuickEditHandler shiftQuickEditHandler,
             ShiftMetricsHandler shiftMetricsHandler,
             ViolationCreationWizard violationWizard,
-            MainMenuKeyboardFactory mainMenuKeyboardFactory
+            MainMenuKeyboardFactory mainMenuKeyboardFactory,
+            TelegramBotSessionCleaner sessionCleaner
     ) {
         super(buildBotOptions(telegramProps));
         this.telegramProps = telegramProps;
@@ -107,6 +112,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         this.shiftMetricsHandler = shiftMetricsHandler;
         this.violationWizard = violationWizard;
         this.mainMenuKeyboardFactory = mainMenuKeyboardFactory;
+        this.sessionCleaner = sessionCleaner;
     }
 
     private void clearShiftFlows(long chatId) {
@@ -114,6 +120,10 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         shiftEndTimeHandler.clearAwaiting(chatId);
         shiftQuickEditHandler.clear(chatId);
         violationWizard.clear(chatId);
+    }
+
+    private void clearLocalSession(long chatId) {
+        sessionCleaner.clear(chatId);
     }
 
     private static DefaultBotOptions buildBotOptions(TelegramBotProperties p) {
@@ -215,7 +225,11 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     handleStart(chatId);
                     return;
                 }
-                if ("/profile".equalsIgnoreCase(text) || MainMenuKeyboardFactory.BTN_PROFILE.equals(text)) {
+                if (MainMenuKeyboardFactory.BTN_MENU.equals(text)) {
+                    handleMenuDialog(chatId);
+                    return;
+                }
+                if ("/profile".equalsIgnoreCase(text)) {
                     handleProfile(chatId);
                     return;
                 }
@@ -229,10 +243,6 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                 }
                 if (MainMenuKeyboardFactory.BTN_SHIFTS.equals(text)) {
                     handleMyShifts(chatId);
-                    return;
-                }
-                if (MainMenuKeyboardFactory.BTN_VACATIONS.equals(text)) {
-                    handleMyVacations(chatId);
                     return;
                 }
             }
@@ -285,7 +295,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             return;
         }
         if (sessions.find(chatId).isPresent()) {
-            handleProfile(chatId);
+            sendMainMenu(chatId, "Главное меню.");
             return;
         }
         sendShareContactPrompt(chatId);
@@ -335,11 +345,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
-            execute(SendMessage.builder()
-                    .chatId(chatId)
-                    .text(profileErrorHint(e.getStatus()))
-                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
-                    .build());
+            execute(coreAccessFailureMessage(chatId, e.getStatus()));
         } catch (Exception e) {
             log.error("Смены chatId={}", chatId, e);
             execute(SendMessage.builder()
@@ -348,6 +354,59 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
                     .build());
         }
+    }
+
+    private void handleMenuDialog(Long chatId) throws TelegramApiException {
+        execute(SendMessage.builder()
+                .chatId(chatId)
+                .text("Выберите раздел:")
+                .replyMarkup(InlineKeyboardMarkup.builder()
+                        .keyboard(List.of(
+                                List.of(ib("📋 Профиль", MainMenuKeyboardFactory.CB_MENU_PROFILE)),
+                                List.of(ib("🏖 Отпуска", MainMenuKeyboardFactory.CB_MENU_VACATIONS)),
+                                List.of(ib("📅 Возможные мероприятия", MainMenuKeyboardFactory.CB_MENU_EVENTS))))
+                        .build())
+                .build());
+    }
+
+    private void handlePossibleEvents(Long chatId) throws TelegramApiException {
+        try {
+            BotEventsResponseDto r = coreProfileClient.getEvents(chatId);
+            String text = truncateTelegram(formatEvents(r));
+            execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text(text)
+                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
+                    .build());
+        } catch (CoreProfileClient.CoreProfileException e) {
+            execute(coreAccessFailureMessage(chatId, e.getStatus()));
+        } catch (Exception e) {
+            log.error("Мероприятия chatId={}", chatId, e);
+            execute(SendMessage.builder()
+                    .chatId(chatId)
+                    .text("Не удалось загрузить мероприятия (Core).")
+                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
+                    .build());
+        }
+    }
+
+    private static String formatEvents(BotEventsResponseDto r) {
+        List<BotEventItemDto> items = r != null && r.items() != null ? r.items() : List.of();
+        StringBuilder sb = new StringBuilder();
+        sb.append("📅 Возможные мероприятия\n\n");
+        if (items.isEmpty()) {
+            sb.append("Нет запланированных мероприятий на сегодня и ближайшее время.");
+            return sb.toString();
+        }
+        for (BotEventItemDto it : items) {
+            String dateStr = it.date() != null ? it.date().format(DATE_RU) : "—";
+            sb.append("• ")
+                    .append(dateStr)
+                    .append(" — ")
+                    .append(nnz(it.name()))
+                    .append('\n');
+        }
+        return sb.toString();
     }
 
     private void handleMyVacations(Long chatId) throws TelegramApiException {
@@ -360,11 +419,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
-            execute(SendMessage.builder()
-                    .chatId(chatId)
-                    .text(profileErrorHint(e.getStatus()))
-                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
-                    .build());
+            execute(coreAccessFailureMessage(chatId, e.getStatus()));
         } catch (Exception e) {
             log.error("Отпуска chatId={}", chatId, e);
             execute(SendMessage.builder()
@@ -494,6 +549,21 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         if (CB_BACK_TO_PROFILE.equals(data)) {
             answerCallback(cqId);
             handleProfile(chatId);
+            return;
+        }
+        if (MainMenuKeyboardFactory.CB_MENU_PROFILE.equals(data)) {
+            answerCallback(cqId);
+            handleProfile(chatId);
+            return;
+        }
+        if (MainMenuKeyboardFactory.CB_MENU_VACATIONS.equals(data)) {
+            answerCallback(cqId);
+            handleMyVacations(chatId);
+            return;
+        }
+        if (MainMenuKeyboardFactory.CB_MENU_EVENTS.equals(data)) {
+            answerCallback(cqId);
+            handlePossibleEvents(chatId);
             return;
         }
         if (CB_ADDR_BACK.equals(data)) {
@@ -643,11 +713,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         } catch (CoreProfileClient.CoreProfileException e) {
             addressSessions.clear(chatId);
             clearShiftFlows(chatId);
-            execute(SendMessage.builder()
-                    .chatId(chatId)
-                    .text(profileErrorHint(e.getStatus()))
-                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
-                    .build());
+            execute(coreAccessFailureMessage(chatId, e.getStatus()));
         } catch (Exception e) {
             log.error("Адрес chatId={}", chatId, e);
             addressSessions.clear(chatId);
@@ -890,11 +956,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
             answerCallback(callbackQueryId);
-            execute(SendMessage.builder()
-                    .chatId(chatId)
-                    .text(profileErrorHint(e.getStatus()))
-                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
-                    .build());
+            execute(coreAccessFailureMessage(chatId, e.getStatus()));
         } catch (Exception e) {
             log.error("Профосмотр chatId={}", chatId, e);
             answerCallback(callbackQueryId);
@@ -925,11 +987,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
-            execute(SendMessage.builder()
-                    .chatId(chatId)
-                    .text(profileErrorHint(e.getStatus()))
-                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
-                    .build());
+            execute(coreAccessFailureMessage(chatId, e.getStatus()));
         } catch (Exception e) {
             log.error("Нагрудный знак chatId={}", chatId, e);
             execute(SendMessage.builder()
@@ -947,11 +1005,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         try {
             coreProfileClient.getProfile(chatId);
         } catch (CoreProfileClient.CoreProfileException e) {
-            execute(SendMessage.builder()
-                    .chatId(chatId)
-                    .text(profileErrorHint(e.getStatus()))
-                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
-                    .build());
+            execute(coreAccessFailureMessage(chatId, e.getStatus()));
             return;
         } catch (Exception e) {
             execute(SendMessage.builder()
@@ -1002,9 +1056,12 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             sendMainMenu(chatId, "С возвращением, " + p.displayName() + "!");
             return;
         } catch (CoreProfileClient.CoreProfileException e) {
-            if (e.getStatus() != 404) {
-                log.debug("Восстановление сессии по chatId не удалось: HTTP {}", e.getStatus());
+            if (e.getStatus() == 403 || e.getStatus() == 404) {
+                clearLocalSession(chatId);
+                execute(coreAccessFailureMessage(chatId, e.getStatus()));
+                return;
             }
+            log.debug("Восстановление сессии по chatId не удалось: HTTP {}", e.getStatus());
         } catch (Exception e) {
             log.debug("Восстановление сессии: {}", e.toString());
         }
@@ -1021,11 +1078,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
-            execute(SendMessage.builder()
-                    .chatId(chatId)
-                    .text(profileErrorHint(e.getStatus()))
-                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
-                    .build());
+            execute(coreAccessFailureMessage(chatId, e.getStatus()));
         } catch (Exception e) {
             log.error("Профиль chatId={}", chatId, e);
             execute(SendMessage.builder()
@@ -1036,20 +1089,30 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         }
     }
 
+    private SendMessage coreAccessFailureMessage(long chatId, int status) {
+        if (status == 403 || status == 404) {
+            clearLocalSession(chatId);
+        }
+        return SendMessage.builder()
+                .chatId(chatId)
+                .text(profileErrorHint(status))
+                .replyMarkup(status == 403 || status == 404
+                        ? mainMenuKeyboardFactory.backOnly()
+                        : mainMenuKeyboardFactory.build(chatId))
+                .build();
+    }
+
     private static String profileErrorHint(int status) {
         return switch (status) {
-            case 404 -> "Сначала войдите: /start и отправьте контакт.";
-            case 403 -> "Доступ запрещён (не в строю).";
+            case 404 -> "Доступ к боту закрыт. Для входа нажмите /start и отправьте контакт.";
+            case 403 -> "Доступ к боту закрыт (сотрудник не в статусе «В строю» или привязка снята).";
             case 401 -> "Ошибка API-ключа к Core. Обратитесь к администратору.";
             default -> "Ошибка запроса к Core (код " + status + ").";
         };
     }
 
     private void handleLogout(Long chatId) throws TelegramApiException {
-        sessions.remove(chatId);
-        pendingInputs.clear(chatId);
-        addressSessions.clear(chatId);
-        clearShiftFlows(chatId);
+        clearLocalSession(chatId);
         execute(SendMessage.builder()
                 .chatId(chatId)
                 .text("Вы вышли из сессии бота. Для входа снова нажмите /start и при необходимости отправьте контакт.")
