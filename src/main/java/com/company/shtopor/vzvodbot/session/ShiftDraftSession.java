@@ -138,10 +138,11 @@ public class ShiftDraftSession {
     }
 
     public boolean isReadyToSubmit() {
+        boolean partnersOk = !participants.isEmpty() || "CHECKING".equals(typeOfShiftId);
         return date != null
                 && routeId != null
                 && typeOfShiftId != null
-                && !participants.isEmpty()
+                && partnersOk
                 && startTime != null;
     }
 }

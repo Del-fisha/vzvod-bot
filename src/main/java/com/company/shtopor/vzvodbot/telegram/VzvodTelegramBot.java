@@ -20,6 +20,9 @@ import com.company.shtopor.vzvodbot.session.BotSession;
 import com.company.shtopor.vzvodbot.session.PendingBotInput;
 import com.company.shtopor.vzvodbot.session.PendingBotInputRegistry;
 import com.company.shtopor.vzvodbot.session.TelegramBotSessionCleaner;
+import com.company.shtopor.vzvodbot.logging.RemoteLoggingClient;
+import com.company.shtopor.vzvodbot.logging.TelegramLogActorResolver;
+import com.company.shtopor.vzvodbot.logging.TelegramLogMessages;
 import com.company.shtopor.vzvodbot.session.TelegramSessionRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -83,6 +86,8 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private final ViolationCreationWizard violationWizard;
     private final MainMenuKeyboardFactory mainMenuKeyboardFactory;
     private final TelegramBotSessionCleaner sessionCleaner;
+    private final RemoteLoggingClient remoteLogging;
+    private final TelegramLogActorResolver logActorResolver;
 
     public VzvodTelegramBot(
             TelegramBotProperties telegramProps,
@@ -97,7 +102,9 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             ShiftMetricsHandler shiftMetricsHandler,
             ViolationCreationWizard violationWizard,
             MainMenuKeyboardFactory mainMenuKeyboardFactory,
-            TelegramBotSessionCleaner sessionCleaner
+            TelegramBotSessionCleaner sessionCleaner,
+            RemoteLoggingClient remoteLogging,
+            TelegramLogActorResolver logActorResolver
     ) {
         super(buildBotOptions(telegramProps));
         this.telegramProps = telegramProps;
@@ -113,6 +120,24 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         this.violationWizard = violationWizard;
         this.mainMenuKeyboardFactory = mainMenuKeyboardFactory;
         this.sessionCleaner = sessionCleaner;
+        this.remoteLogging = remoteLogging;
+        this.logActorResolver = logActorResolver;
+    }
+
+    public void sendAndLog(SendMessage message) throws TelegramApiException {
+        String text = message.getText();
+        if (text != null && !text.isBlank()) {
+            String actor = logActorResolver.resolve(Long.parseLong(message.getChatId()));
+            remoteLogging.logMain(TelegramLogMessages.programReply(actor, truncateForLog(text)));
+        }
+        execute(message);
+    }
+
+    private static String truncateForLog(String text) {
+        if (text.length() <= 500) {
+            return text;
+        }
+        return text.substring(0, 500) + "…";
     }
 
     private void clearShiftFlows(long chatId) {
@@ -167,6 +192,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
+        logIncomingUpdate(update);
         try {
             if (update.hasCallbackQuery()) {
                 handleCallbackQuery(update.getCallbackQuery());
@@ -246,13 +272,39 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     return;
                 }
             }
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Нажмите /start для входа или выберите пункт меню.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
                     .build());
         } catch (TelegramApiException e) {
             log.error("Telegram API error", e);
+            remoteLogging.logError("Ошибка Telegram API: " + e.getMessage());
+        } catch (Exception e) {
+            log.error("Ошибка обработки update", e);
+            remoteLogging.logError("Ошибка обработки сообщения: " + e.getMessage());
+        }
+    }
+
+    private void logIncomingUpdate(Update update) {
+        if (update.hasCallbackQuery()) {
+            CallbackQuery cq = update.getCallbackQuery();
+            long chatId = cq.getMessage() != null ? cq.getMessage().getChatId() : cq.getFrom().getId();
+            String actor = logActorResolver.resolve(chatId);
+            remoteLogging.logMain(TelegramLogMessages.userAction(actor, cq.getData()));
+            return;
+        }
+        if (!update.hasMessage()) {
+            return;
+        }
+        Message msg = update.getMessage();
+        Long chatId = msg.getChatId();
+        if (msg.hasContact()) {
+            return;
+        }
+        String actor = logActorResolver.resolve(chatId);
+        if (msg.hasText()) {
+            remoteLogging.logMain(TelegramLogMessages.userMessage(actor, msg.getText()));
         }
     }
 
@@ -267,7 +319,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             return;
         }
         if (shiftQuickEditHandler.clearIfAwaitingDate(chatId)) {
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Изменение даты отменено.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -275,15 +327,24 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             return;
         }
         if (shiftQuickEditHandler.clearIfPartnerPick(chatId)) {
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Выбор напарника отменён.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
                     .build());
             return;
         }
+        if (shiftEndTimeHandler.isConfirmFlowActive(chatId)) {
+            shiftEndTimeHandler.clearAwaiting(chatId);
+            sendAndLog(SendMessage.builder()
+                    .chatId(chatId)
+                    .text("Завершение смены отменено.")
+                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
+                    .build());
+            return;
+        }
         if (shiftEndTimeHandler.clearAwaitingIfPresent(chatId)) {
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Ввод времени окончания отменён.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -308,7 +369,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         if (sessions.find(chatId).isPresent()) {
             sendMainMenu(chatId, "Главное меню.");
         } else {
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Для работы с ботом нажмите /start и при необходимости отправьте контакт.")
                     .replyMarkup(mainMenuKeyboardFactory.backOnly())
@@ -339,7 +400,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     rows.add(row);
                 }
             }
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(text)
                     .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
@@ -348,7 +409,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             execute(coreAccessFailureMessage(chatId, e.getStatus()));
         } catch (Exception e) {
             log.error("Смены chatId={}", chatId, e);
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Не удалось загрузить смены (Core).")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -357,7 +418,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     }
 
     private void handleMenuDialog(Long chatId) throws TelegramApiException {
-        execute(SendMessage.builder()
+        sendAndLog(SendMessage.builder()
                 .chatId(chatId)
                 .text("Выберите раздел:")
                 .replyMarkup(InlineKeyboardMarkup.builder()
@@ -373,7 +434,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         try {
             BotEventsResponseDto r = coreProfileClient.getEvents(chatId);
             String text = truncateTelegram(formatEvents(r));
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(text)
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -382,7 +443,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             execute(coreAccessFailureMessage(chatId, e.getStatus()));
         } catch (Exception e) {
             log.error("Мероприятия chatId={}", chatId, e);
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Не удалось загрузить мероприятия (Core).")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -413,7 +474,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         try {
             BotVacationsResponseDto r = coreProfileClient.getVacations(chatId);
             String text = truncateTelegram(formatVacations(r));
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(text)
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -422,7 +483,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             execute(coreAccessFailureMessage(chatId, e.getStatus()));
         } catch (Exception e) {
             log.error("Отпуска chatId={}", chatId, e);
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Не удалось загрузить отпуска (Core).")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -620,7 +681,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                 addressSessions.clear(chatId);
                 clearShiftFlows(chatId);
                 pendingInputs.set(chatId, PendingBotInput.BREASTPLATE);
-                execute(SendMessage.builder()
+                sendAndLog(SendMessage.builder()
                         .chatId(chatId)
                         .text("Введите нагрудный знак ровно 8 символов одним сообщением (латиница или цифры).")
                         .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -705,7 +766,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             coreProfileClient.updateProfile(chatId, patch);
             addressSessions.clear(chatId);
             clearShiftFlows(chatId);
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Адрес сохранён в карточке.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -718,7 +779,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             log.error("Адрес chatId={}", chatId, e);
             addressSessions.clear(chatId);
             clearShiftFlows(chatId);
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Не удалось связаться с Core.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -733,7 +794,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                 ib("Квартира", PREFIX_TYPE + "|" + t + "|A"),
                 ib("Комната", PREFIX_TYPE + "|" + t + "|B"),
                 ib("Частный дом", PREFIX_TYPE + "|" + t + "|C")));
-        execute(SendMessage.builder()
+        sendAndLog(SendMessage.builder()
                 .chatId(chatId)
                 .text(addressPromptPrefix(s.getTarget()) + "Выберите тип жилья.")
                 .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
@@ -749,7 +810,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         rows.add(List.of(
                 ib("Аренда", PREFIX_STATUS + "|" + t + "|C"),
                 ib("Совместное", PREFIX_STATUS + "|" + t + "|D")));
-        execute(SendMessage.builder()
+        sendAndLog(SendMessage.builder()
                 .chatId(chatId)
                 .text(addressPromptPrefix(s.getTarget()) + "Выберите статус жилья.")
                 .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
@@ -769,28 +830,28 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private void sendAddressStepPrompt(Long chatId, AddressEditSession s) throws TelegramApiException {
         String prefix = addressPromptPrefix(s.getTarget());
         switch (s.getStep()) {
-            case 0 -> execute(SendMessage.builder()
+            case 0 -> sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(prefix + "Индекс (6 цифр), например 190000.")
                     .build());
-            case 1 -> execute(SendMessage.builder()
+            case 1 -> sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(prefix + "Город (как в документе) или кнопка ниже.")
                     .replyMarkup(cityStepKeyboard(s))
                     .build());
-            case 2 -> execute(SendMessage.builder()
+            case 2 -> sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(prefix + "Улица.")
                     .build());
-            case 3 -> execute(SendMessage.builder()
+            case 3 -> sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(prefix + "Номер дома (до 5 символов).")
                     .build());
-            case 4 -> execute(SendMessage.builder()
+            case 4 -> sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(prefix + "Корпус / строение (или «-» если нет, до 4 символов).")
                     .build());
-            case 5 -> execute(SendMessage.builder()
+            case 5 -> sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(prefix + "Квартира (или «-» если нет, до 10 символов).")
                     .build());
@@ -861,7 +922,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         switch (s.getStep()) {
             case 0 -> {
                 if (!INDEX_6.matcher(v).matches()) {
-                    execute(SendMessage.builder()
+                    sendAndLog(SendMessage.builder()
                             .chatId(chatId)
                             .text(prefix + "Нужен индекс из 6 цифр. Повторите ввод.")
                             .build());
@@ -873,7 +934,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             }
             case 1 -> {
                 if (v.isEmpty() || v.length() > 50) {
-                    execute(SendMessage.builder()
+                    sendAndLog(SendMessage.builder()
                             .chatId(chatId)
                             .text(prefix + "Город обязателен, до 50 символов.")
                             .replyMarkup(cityStepKeyboard(s))
@@ -886,7 +947,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             }
             case 2 -> {
                 if (v.isEmpty() || v.length() > 255) {
-                    execute(SendMessage.builder()
+                    sendAndLog(SendMessage.builder()
                             .chatId(chatId)
                             .text(prefix + "Улица обязательна, до 255 символов.")
                             .build());
@@ -898,7 +959,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             }
             case 3 -> {
                 if (v.isEmpty() || v.length() > 5) {
-                    execute(SendMessage.builder()
+                    sendAndLog(SendMessage.builder()
                             .chatId(chatId)
                             .text(prefix + "Номер дома обязателен, до 5 символов.")
                             .build());
@@ -912,7 +973,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                 if ("-".equals(v)) {
                     s.setBody(null);
                 } else if (v.length() > 4) {
-                    execute(SendMessage.builder()
+                    sendAndLog(SendMessage.builder()
                             .chatId(chatId)
                             .text(prefix + "Корпус не длиннее 4 символов или «-».")
                             .build());
@@ -927,7 +988,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                 if ("-".equals(v)) {
                     s.setFlat(null);
                 } else if (v.length() > 10) {
-                    execute(SendMessage.builder()
+                    sendAndLog(SendMessage.builder()
                             .chatId(chatId)
                             .text(prefix + "Квартира не длиннее 10 символов или «-».")
                             .build());
@@ -949,7 +1010,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         try {
             coreProfileClient.updateProfile(chatId, new BotProfilePatchDto(null, value, null, null));
             answerCallback(callbackQueryId);
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(value ? "Профосмотр отмечен как пройден." : "Профосмотр отмечен как не пройден.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -960,7 +1021,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         } catch (Exception e) {
             log.error("Профосмотр chatId={}", chatId, e);
             answerCallback(callbackQueryId);
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Не удалось связаться с Core.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -971,7 +1032,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private void handleBreastplateText(Long chatId, String text) throws TelegramApiException {
         String bp = text.trim();
         if (bp.length() != 8) {
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Нужно ровно 8 символов. Попробуйте ещё раз или отмените: /edit_profile.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -981,7 +1042,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         try {
             coreProfileClient.updateProfile(chatId, new BotProfilePatchDto(bp, null, null, null));
             pendingInputs.clear(chatId);
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Нагрудный знак обновлён: " + bp)
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -990,7 +1051,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             execute(coreAccessFailureMessage(chatId, e.getStatus()));
         } catch (Exception e) {
             log.error("Нагрудный знак chatId={}", chatId, e);
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Не удалось связаться с Core.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -1008,7 +1069,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             execute(coreAccessFailureMessage(chatId, e.getStatus()));
             return;
         } catch (Exception e) {
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Не удалось связаться с Core.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -1031,7 +1092,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         rows.add(List.of(
                 InlineKeyboardButton.builder().text("✅ Профосмотр пройден").callbackData(CB_MED_YES).build(),
                 InlineKeyboardButton.builder().text("❌ Не пройден").callbackData(CB_MED_NO).build()));
-        execute(SendMessage.builder()
+        sendAndLog(SendMessage.builder()
                 .chatId(chatId)
                 .text("Контакты в боте: только адреса. Телефон меняется только в учётной системе.\n\nЧто изменить?")
                 .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
@@ -1072,7 +1133,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         try {
             BotProfileDto p = coreProfileClient.getProfile(chatId);
             sessions.put(chatId, new BotSession(p.userId(), p.displayName()));
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(formatProfile(p))
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -1081,7 +1142,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             execute(coreAccessFailureMessage(chatId, e.getStatus()));
         } catch (Exception e) {
             log.error("Профиль chatId={}", chatId, e);
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Не удалось связаться с Core для загрузки профиля.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -1097,7 +1158,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                 .chatId(chatId)
                 .text(profileErrorHint(status))
                 .replyMarkup(status == 403 || status == 404
-                        ? mainMenuKeyboardFactory.backOnly()
+                        ? mainMenuKeyboardFactory.shareContactLogin()
                         : mainMenuKeyboardFactory.build(chatId))
                 .build();
     }
@@ -1113,10 +1174,10 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
 
     private void handleLogout(Long chatId) throws TelegramApiException {
         clearLocalSession(chatId);
-        execute(SendMessage.builder()
+        sendAndLog(SendMessage.builder()
                 .chatId(chatId)
-                .text("Вы вышли из сессии бота. Для входа снова нажмите /start и при необходимости отправьте контакт.")
-                .replyMarkup(mainMenuKeyboardFactory.backOnly())
+                .text("Вы вышли из сессии бота. Для входа снова нажмите /start и отправьте контакт кнопкой ниже.")
+                .replyMarkup(mainMenuKeyboardFactory.shareContactLogin())
                 .build());
     }
 
@@ -1156,7 +1217,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     }
 
     private void sendShareContactPrompt(Long chatId) throws TelegramApiException {
-        execute(SendMessage.builder()
+        sendAndLog(SendMessage.builder()
                 .chatId(chatId)
                 .text("Для входа отправьте свой мобильный номер кнопкой ниже (как в Telegram «Поделиться контактом»).")
                 .replyMarkup(shareContactKeyboard())
@@ -1164,7 +1225,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     }
 
     private void sendMainMenu(Long chatId, String text) throws TelegramApiException {
-        execute(SendMessage.builder()
+        sendAndLog(SendMessage.builder()
                 .chatId(chatId)
                 .text(shiftMetricsHandler.appendOpenShiftSummary(chatId, text))
                 .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -1174,7 +1235,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private void handleContact(Long chatId, Contact contact) throws TelegramApiException {
         String phone = contact.getPhoneNumber();
         if (phone == null || phone.isBlank()) {
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("В контакте нет номера телефона.")
                     .replyMarkup(shareContactKeyboard())
@@ -1187,7 +1248,8 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             addressSessions.clear(chatId);
             clearShiftFlows(chatId);
             sessions.put(chatId, new BotSession(r.userId(), r.displayName()));
-            execute(SendMessage.builder()
+            remoteLogging.logMain(TelegramLogMessages.contactShared(r.displayName()));
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Добро пожаловать, " + r.displayName() + ". Учётная запись привязана.")
                     .replyMarkup(mainMenuKeyboardFactory.build(chatId))
@@ -1200,14 +1262,14 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                 case 409 -> "Этот Telegram уже привязан к другому сотруднику.";
                 default -> "Не удалось войти (код " + e.getStatus() + ").";
             };
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text(userHint)
                     .replyMarkup(shareContactKeyboard())
                     .build());
         } catch (Exception e) {
             log.error("Связь с Core при авторизации chatId={}", chatId, e);
-            execute(SendMessage.builder()
+            sendAndLog(SendMessage.builder()
                     .chatId(chatId)
                     .text("Не удалось связаться с сервером (Core). Убедитесь, что он запущен и адрес vzvod.core.base-url верный.")
                     .replyMarkup(shareContactKeyboard())
@@ -1216,17 +1278,6 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     }
 
     private ReplyKeyboardMarkup shareContactKeyboard() {
-        KeyboardButton phone = KeyboardButton.builder()
-                .text("Отправить номер")
-                .requestContact(true)
-                .build();
-        return ReplyKeyboardMarkup.builder()
-                .keyboard(List.of(
-                        new KeyboardRow(List.of(phone)),
-                        new KeyboardRow(List.of(
-                                KeyboardButton.builder().text(MainMenuKeyboardFactory.BTN_BACK).build()))))
-                .resizeKeyboard(true)
-                .oneTimeKeyboard(true)
-                .build();
+        return mainMenuKeyboardFactory.shareContactLogin();
     }
 }

@@ -1,24 +1,16 @@
 package com.company.shtopor.vzvodbot.telegram;
 
-import com.company.shtopor.vzvodbot.core.BotShiftEndTimeRequestDto;
-import com.company.shtopor.vzvodbot.core.CoreProfileClient;
-import com.company.shtopor.vzvodbot.session.ShiftEndAwaitingStore;
+import com.company.shtopor.vzvodbot.session.ShiftEndConfirmSession;
+import com.company.shtopor.vzvodbot.session.ShiftEndConfirmSessionStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
 import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -32,75 +24,90 @@ public class ShiftEndTimeHandler {
     public static final String PREFIX_END_PICK = "sfe";
     public static final String PREFIX_END_APPLY = "sft";
     public static final String PREFIX_END_MANUAL = "sfm";
+    /** Выбор времени при уточнении в потоке «Изменить» */
+    public static final String PREFIX_END_APPLY_EDIT = "sfte";
+    public static final String PREFIX_END_MANUAL_EDIT = "sfme";
 
-    private static final DateTimeFormatter DATE_RU = DateTimeFormatter.ofPattern("dd.MM.yyyy", Locale.forLanguageTag("ru-RU"));
-    private static final DateTimeFormatter TIME_SHORT = DateTimeFormatter.ofPattern("HH:mm", Locale.forLanguageTag("ru-RU"));
-
-    private final CoreProfileClient coreProfileClient;
-    private final ShiftEndAwaitingStore awaitingStore;
-    private final MainMenuKeyboardFactory mainMenuKeyboardFactory;
+    private final ShiftEndConfirmSessionStore confirmSessionStore;
+    private final ShiftEndConfirmationHandler confirmationHandler;
 
     public ShiftEndTimeHandler(
-            CoreProfileClient coreProfileClient,
-            ShiftEndAwaitingStore awaitingStore,
-            MainMenuKeyboardFactory mainMenuKeyboardFactory
+            ShiftEndConfirmSessionStore confirmSessionStore,
+            ShiftEndConfirmationHandler confirmationHandler
     ) {
-        this.coreProfileClient = coreProfileClient;
-        this.awaitingStore = awaitingStore;
-        this.mainMenuKeyboardFactory = mainMenuKeyboardFactory;
+        this.confirmSessionStore = confirmSessionStore;
+        this.confirmationHandler = confirmationHandler;
     }
 
     public void clearAwaiting(long chatId) {
-        awaitingStore.clear(chatId);
+        confirmSessionStore.clear(chatId);
+    }
+
+    public boolean isConfirmFlowActive(long chatId) {
+        return confirmationHandler.isActive(chatId);
     }
 
     /** @return true если ожидался ввод времени и сессия сброшена */
     public boolean clearAwaitingIfPresent(long chatId) {
-        if (awaitingStore.get(chatId).isEmpty()) {
+        var opt = confirmSessionStore.get(chatId);
+        if (opt.isEmpty()) {
             return false;
         }
-        awaitingStore.clear(chatId);
-        return true;
+        ShiftEndConfirmSession.EditStep step = opt.get().getStep();
+        if (step == ShiftEndConfirmSession.EditStep.AWAIT_MANUAL_TIME
+                || step == ShiftEndConfirmSession.EditStep.AWAIT_EDIT_MANUAL_TIME) {
+            confirmSessionStore.clear(chatId);
+            return true;
+        }
+        return false;
     }
 
-    /**
-     * @return true если префикс относится к завершению смены (в т.ч. «пустой» чат — колбэк погашен)
-     */
     public boolean isShiftEndCallback(String data) {
-        return data != null && (data.startsWith(PREFIX_END_PICK + "|")
+        if (data == null) {
+            return false;
+        }
+        return data.startsWith(PREFIX_END_PICK + "|")
                 || data.startsWith(PREFIX_END_APPLY + "|")
-                || data.startsWith(PREFIX_END_MANUAL + "|"));
+                || data.startsWith(PREFIX_END_MANUAL + "|")
+                || data.startsWith(PREFIX_END_APPLY_EDIT + "|")
+                || data.startsWith(PREFIX_END_MANUAL_EDIT + "|")
+                || confirmationHandler.isConfirmCallback(data);
     }
 
     public boolean handleCallback(TelegramLongPollingBot bot, long chatId, String data, String cqId)
             throws TelegramApiException {
-        if (!isShiftEndCallback(data)) {
+        if (confirmationHandler.handleCallback(bot, chatId, data, cqId)) {
+            return confirmationHandler.isConfirmCallback(data);
+        }
+        if (!isTimePickerCallback(data)) {
             return false;
         }
         answer(bot, cqId);
         if (data.startsWith(PREFIX_END_PICK + "|")) {
             try {
                 UUID shiftId = UUID.fromString(data.substring((PREFIX_END_PICK + "|").length()));
-                sendEndTimePicker(bot, chatId, shiftId);
+                confirmationHandler.sendEndTimePicker(bot, chatId, shiftId, false);
             } catch (IllegalArgumentException e) {
                 log.debug("bad sfe {}", data);
                 bot.execute(SendMessage.builder().chatId(chatId).text("Некорректная ссылка на смену.").build());
             }
             return true;
         }
-        if (data.startsWith(PREFIX_END_APPLY + "|")) {
+        if (data.startsWith(PREFIX_END_APPLY + "|") || data.startsWith(PREFIX_END_APPLY_EDIT + "|")) {
+            boolean editFlow = data.startsWith(PREFIX_END_APPLY_EDIT + "|");
+            String prefix = editFlow ? PREFIX_END_APPLY_EDIT : PREFIX_END_APPLY;
             String[] p = data.split("\\|");
             if (p.length == 3) {
                 try {
                     UUID shiftId = UUID.fromString(p[1]);
                     LocalTime end = parseHmDigits(p[2]);
                     if (end != null) {
-                        applyEndTime(bot, chatId, shiftId, end);
+                        confirmationHandler.onTimePicked(bot, chatId, shiftId, end);
                     } else {
                         bot.execute(SendMessage.builder().chatId(chatId).text("Некорректное время в кнопке.").build());
                     }
                 } catch (IllegalArgumentException e) {
-                    log.debug("bad sft {}", data);
+                    log.debug("bad end apply {}", data);
                     bot.execute(SendMessage.builder().chatId(chatId).text("Некорректная ссылка на смену.").build());
                 }
             }
@@ -109,7 +116,7 @@ public class ShiftEndTimeHandler {
         if (data.startsWith(PREFIX_END_MANUAL + "|")) {
             try {
                 UUID shiftId = UUID.fromString(data.substring((PREFIX_END_MANUAL + "|").length()));
-                awaitingStore.put(chatId, shiftId);
+                confirmationHandler.beginAwaitingManualTime(chatId, shiftId);
                 bot.execute(SendMessage.builder()
                         .chatId(chatId)
                         .text("Введите время окончания смены в формате ЧЧ:ММ (например 20:30).")
@@ -120,87 +127,38 @@ public class ShiftEndTimeHandler {
             }
             return true;
         }
+        if (data.startsWith(PREFIX_END_MANUAL_EDIT + "|")) {
+            try {
+                UUID shiftId = UUID.fromString(data.substring((PREFIX_END_MANUAL_EDIT + "|").length()));
+                var opt = confirmSessionStore.get(chatId);
+                if (opt.isPresent() && shiftId.equals(opt.get().getShiftId())) {
+                    ShiftEndConfirmSession session = opt.get();
+                    session.setStep(ShiftEndConfirmSession.EditStep.AWAIT_EDIT_MANUAL_TIME);
+                    confirmSessionStore.put(chatId, session);
+                }
+                bot.execute(SendMessage.builder()
+                        .chatId(chatId)
+                        .text("Введите время окончания смены в формате ЧЧ:ММ (например 20:30).")
+                        .build());
+            } catch (IllegalArgumentException e) {
+                log.debug("bad sfme {}", data);
+                bot.execute(SendMessage.builder().chatId(chatId).text("Некорректная ссылка на смену.").build());
+            }
+            return true;
+        }
         return true;
     }
 
     public boolean handleText(TelegramLongPollingBot bot, long chatId, String text) throws TelegramApiException {
-        var opt = awaitingStore.get(chatId);
-        if (opt.isEmpty()) {
-            return false;
-        }
-        UUID shiftId = opt.get();
-        LocalTime t = parseTimeHm(text.trim());
-        if (t == null) {
-            bot.execute(SendMessage.builder()
-                    .chatId(chatId)
-                    .text("Нужно время в формате ЧЧ:ММ.")
-                    .build());
-            return true;
-        }
-        applyEndTime(bot, chatId, shiftId, t);
-        return true;
+        return confirmationHandler.handleText(bot, chatId, text);
     }
 
-    private void sendEndTimePicker(TelegramLongPollingBot bot, long chatId, UUID shiftId) throws TelegramApiException {
-        String sid = shiftId.toString();
-        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        rows.add(List.of(
-                ib("21:00", PREFIX_END_APPLY + "|" + sid + "|2100"),
-                ib("22:00", PREFIX_END_APPLY + "|" + sid + "|2200"),
-                ib("23:00", PREFIX_END_APPLY + "|" + sid + "|2300")));
-        rows.add(List.of(ib("Или ввести самому", PREFIX_END_MANUAL + "|" + sid)));
-        bot.execute(SendMessage.builder()
-                .chatId(chatId)
-                .text("Укажите время окончания смены.")
-                .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
-                .build());
-    }
-
-    private void applyEndTime(TelegramLongPollingBot bot, long chatId, UUID shiftId, LocalTime endTime)
-            throws TelegramApiException {
-        try {
-            var saved = coreProfileClient.setShiftEndTime(chatId, shiftId, new BotShiftEndTimeRequestDto(endTime));
-            awaitingStore.clear(chatId);
-            String t0 = saved.startTime() != null ? saved.startTime().format(TIME_SHORT) : "—";
-            String t1 = saved.endTime() != null ? saved.endTime().format(TIME_SHORT) : "—";
-            bot.execute(SendMessage.builder()
-                    .chatId(chatId)
-                    .text("Смена завершена в учёте: "
-                            + (saved.date() != null ? saved.date().format(DATE_RU) : "—")
-                            + " · с " + t0 + " по " + t1)
-                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
-                    .build());
-        } catch (CoreProfileClient.CoreProfileException e) {
-            awaitingStore.clear(chatId);
-            bot.execute(SendMessage.builder()
-                    .chatId(chatId)
-                    .text(endTimeErrorHint(e.getStatus()))
-                    .replyMarkup(mainMenuKeyboardFactory.build(chatId))
-                    .build());
-        }
-    }
-
-    private static String endTimeErrorHint(int status) {
-        return switch (status) {
-            case 400 -> "Не удалось сохранить: проверьте, что время окончания позже времени начала.";
-            case 403 -> "Доступ к этой смене запрещён.";
-            case 404 -> "Смена не найдена.";
-            case 409 -> "Время окончания уже было указано ранее.";
-            case 401 -> "Ошибка API-ключа к Core.";
-            default -> "Ошибка запроса к Core (код " + status + ").";
-        };
-    }
-
-    private static LocalTime parseTimeHm(String v) {
-        try {
-            return LocalTime.parse(v.trim(), TIME_SHORT);
-        } catch (DateTimeParseException e) {
-            try {
-                return LocalTime.parse(v.trim());
-            } catch (DateTimeParseException e2) {
-                return null;
-            }
-        }
+    private static boolean isTimePickerCallback(String data) {
+        return data.startsWith(PREFIX_END_PICK + "|")
+                || data.startsWith(PREFIX_END_APPLY + "|")
+                || data.startsWith(PREFIX_END_MANUAL + "|")
+                || data.startsWith(PREFIX_END_APPLY_EDIT + "|")
+                || data.startsWith(PREFIX_END_MANUAL_EDIT + "|");
     }
 
     private static LocalTime parseHmDigits(String four) {
@@ -214,10 +172,6 @@ public class ShiftEndTimeHandler {
         } catch (Exception e) {
             return null;
         }
-    }
-
-    private static InlineKeyboardButton ib(String text, String data) {
-        return InlineKeyboardButton.builder().text(text).callbackData(data).build();
     }
 
     private static void answer(TelegramLongPollingBot bot, String cqId) throws TelegramApiException {

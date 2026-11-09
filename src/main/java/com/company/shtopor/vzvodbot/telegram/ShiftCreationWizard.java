@@ -6,7 +6,8 @@ import com.company.shtopor.vzvodbot.core.CoreProfileClient;
 import com.company.shtopor.vzvodbot.session.AddressEditSessionStore;
 import com.company.shtopor.vzvodbot.session.ShiftDraftSession;
 import com.company.shtopor.vzvodbot.session.ShiftDraftSessionStore;
-import com.company.shtopor.vzvodbot.session.ShiftEndAwaitingStore;
+import com.company.shtopor.vzvodbot.session.ShiftEndConfirmSessionStore;
+import com.company.shtopor.vzvodbot.shift.ColleagueButtonLabel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -31,7 +32,8 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
- * Мастер создания смены: дата → маршрут → тип → отделение напарника → коллега → время начала → подтверждение, затем POST в Core.
+ * Мастер создания смены: дата → маршрут → тип → отделение напарника → коллега
+ * (актуальный список из Core) → время начала → подтверждение, затем POST в Core.
  */
 @Component
 public class ShiftCreationWizard {
@@ -45,6 +47,7 @@ public class ShiftCreationWizard {
     private static final String PREFIX_SHIFT_ROUTE = "srv";
     private static final String PREFIX_SHIFT_TYPE = "sty";
     private static final String PREFIX_SHIFT_DEPT = "sdd";
+    private static final String CB_SHIFT_NO_PARTNER = "sdnp";
     private static final String PREFIX_SHIFT_COLLEAGUE = "sdp";
     private static final String PREFIX_SHIFT_COLPAGE = "sdn";
     private static final String PREFIX_SHIFT_TSTART = "sds";
@@ -71,18 +74,18 @@ public class ShiftCreationWizard {
     private final ShiftDraftSessionStore store;
     private final CoreProfileClient coreProfileClient;
     private final AddressEditSessionStore addressSessions;
-    private final ShiftEndAwaitingStore shiftEndAwaitingStore;
+    private final ShiftEndConfirmSessionStore shiftEndConfirmSessionStore;
 
     public ShiftCreationWizard(
             ShiftDraftSessionStore store,
             CoreProfileClient coreProfileClient,
             AddressEditSessionStore addressSessions,
-            ShiftEndAwaitingStore shiftEndAwaitingStore
+            ShiftEndConfirmSessionStore shiftEndConfirmSessionStore
     ) {
         this.store = store;
         this.coreProfileClient = coreProfileClient;
         this.addressSessions = addressSessions;
-        this.shiftEndAwaitingStore = shiftEndAwaitingStore;
+        this.shiftEndConfirmSessionStore = shiftEndConfirmSessionStore;
     }
 
     public boolean isActive(long chatId) {
@@ -330,8 +333,10 @@ public class ShiftCreationWizard {
                             .build());
                     return true;
                 }
-                String label = resolveColleagueLabel(chatId, s.getPartnerDepartment(), s.getColleaguePage(), id);
-                s.addParticipant(id, label, s.getPartnerDepartment());
+                BotColleagueItemDto found = findColleague(chatId, s.getPartnerDepartment(), s.getColleaguePage(), id);
+                String label = found == null || found.label() == null || found.label().isBlank() ? "—" : found.label();
+                Integer itemDep = found != null ? found.department() : null;
+                s.addParticipant(id, label, itemDep != null ? itemDep : s.getPartnerDepartment());
                 s.setConfirmPartnerPicker(ShiftDraftSession.ConfirmPartnerPicker.IDLE);
                 store.put(chatId, s);
                 sendConfirm(bot, chatId, s);
@@ -384,9 +389,24 @@ public class ShiftCreationWizard {
                 return true;
             }
             s.setTypeOfShiftId(typeId);
+            s.setPartnerDepartment(null);
+            s.setColleaguePage(0);
+            s.clearParticipants();
             s.setStep(3);
             store.put(chatId, s);
-            sendDepartmentStep(bot, chatId);
+            sendDepartmentStep(bot, chatId, s);
+            return true;
+        }
+        if (CB_SHIFT_NO_PARTNER.equals(data)) {
+            answer(bot, cqId);
+            if (s.getStep() != 3 || !"CHECKING".equals(s.getTypeOfShiftId())) {
+                return true;
+            }
+            s.clearParticipants();
+            s.setPartnerDepartment(null);
+            s.setStep(5);
+            store.put(chatId, s);
+            sendStartTimeStep(bot, chatId);
             return true;
         }
         if (data.startsWith(PREFIX_SHIFT_DEPT + "|")) {
@@ -441,8 +461,10 @@ public class ShiftCreationWizard {
             }
             try {
                 UUID id = UUID.fromString(data.substring((PREFIX_SHIFT_COLLEAGUE + "|").length()));
-                String label = resolveColleagueLabel(chatId, s.getPartnerDepartment(), s.getColleaguePage(), id);
-                s.setPrimaryParticipant(id, label, s.getPartnerDepartment());
+                BotColleagueItemDto found = findColleague(chatId, s.getPartnerDepartment(), s.getColleaguePage(), id);
+                String label = found == null || found.label() == null || found.label().isBlank() ? "—" : found.label();
+                Integer itemDep = found != null ? found.department() : null;
+                s.setPrimaryParticipant(id, label, itemDep != null ? itemDep : s.getPartnerDepartment());
                 s.setStep(5);
                 store.put(chatId, s);
                 sendStartTimeStep(bot, chatId);
@@ -470,7 +492,7 @@ public class ShiftCreationWizard {
     }
 
     public void startWizard(TelegramLongPollingBot bot, long chatId) throws TelegramApiException {
-        shiftEndAwaitingStore.clear(chatId);
+        shiftEndConfirmSessionStore.clear(chatId);
         ShiftDraftSession s = new ShiftDraftSession();
         s.setStep(0);
         store.put(chatId, s);
@@ -523,7 +545,9 @@ public class ShiftCreationWizard {
                 List.of(
                         ib("Пост батальона", PREFIX_SHIFT_TYPE + "|BAT_POST"),
                         ib("Маршрут взвода", PREFIX_SHIFT_TYPE + "|VZVOD_ROUTE")),
-                List.of(ib("Усиление", PREFIX_SHIFT_TYPE + "|Strengthening")));
+                List.of(
+                        ib("Проверки", PREFIX_SHIFT_TYPE + "|CHECKING"),
+                        ib("Усиление", PREFIX_SHIFT_TYPE + "|Strengthening")));
         bot.execute(SendMessage.builder()
                 .chatId(chatId)
                 .text("Шаг 3/" + TOTAL_STEPS + ": тип наряда.")
@@ -531,14 +555,29 @@ public class ShiftCreationWizard {
                 .build());
     }
 
-    private void sendDepartmentStep(TelegramLongPollingBot bot, long chatId) throws TelegramApiException {
-        List<List<InlineKeyboardButton>> rows = List.of(
-                List.of(ib("Отделение 1", PREFIX_SHIFT_DEPT + "|1"), ib("Отделение 2", PREFIX_SHIFT_DEPT + "|2")));
+    private void sendDepartmentStep(TelegramLongPollingBot bot, long chatId, ShiftDraftSession s)
+            throws TelegramApiException {
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(List.of(ib("Отделение 1", PREFIX_SHIFT_DEPT + "|1"), ib("Отделение 2", PREFIX_SHIFT_DEPT + "|2")));
+        if ("CHECKING".equals(s.getTypeOfShiftId())) {
+            rows.add(List.of(ib("Без напарника (одному)", CB_SHIFT_NO_PARTNER)));
+        }
         bot.execute(SendMessage.builder()
                 .chatId(chatId)
-                .text("Шаг 4/" + TOTAL_STEPS + ": отделение напарника по смене.")
+                .text("Шаг 4/" + TOTAL_STEPS + ": отделение напарника по смене"
+                        + ("CHECKING".equals(s.getTypeOfShiftId())
+                        ? " (для проверок можно одному)."
+                        : "."))
                 .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
                 .build());
+    }
+
+    private void sendDepartmentStep(TelegramLongPollingBot bot, long chatId) throws TelegramApiException {
+        Optional<ShiftDraftSession> opt = store.get(chatId);
+        if (opt.isEmpty()) {
+            return;
+        }
+        sendDepartmentStep(bot, chatId, opt.get());
     }
 
     private void sendColleagueStep(TelegramLongPollingBot bot, long chatId, ShiftDraftSession s) throws TelegramApiException {
@@ -548,6 +587,7 @@ public class ShiftCreationWizard {
             return;
         }
         try {
+            // Каждый вход в меню — свежий список из Core (новые сотрудники появляются без пересборки бота).
             var resp = coreProfileClient.getColleagues(chatId, dept, s.getColleaguePage());
             List<BotColleagueItemDto> items = resp.items() == null ? List.of() : resp.items();
             if (items.isEmpty()) {
@@ -562,8 +602,7 @@ public class ShiftCreationWizard {
                 if (it.serviceInfoId() == null) {
                     continue;
                 }
-                String label = it.label() == null || it.label().isBlank() ? "Сотрудник" : it.label();
-                rows.add(List.of(ib(label, PREFIX_SHIFT_COLLEAGUE + "|" + it.serviceInfoId())));
+                rows.add(List.of(ib(ColleagueButtonLabel.of(it), PREFIX_SHIFT_COLLEAGUE + "|" + it.serviceInfoId())));
             }
             if (resp.hasMore()) {
                 int next = s.getColleaguePage() + 1;
@@ -571,7 +610,8 @@ public class ShiftCreationWizard {
             }
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
-                    .text("Шаг 5/" + TOTAL_STEPS + ": напарник (отделение " + dept + "). Выберите сотрудника.")
+                    .text("Шаг 5/" + TOTAL_STEPS + ": напарник (отделение " + dept + ").\n"
+                            + "Список подгружается из учёта при каждом открытии.")
                     .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
@@ -590,16 +630,14 @@ public class ShiftCreationWizard {
                         ib("11:00", PREFIX_SHIFT_TSTART + "|1100")));
         bot.execute(SendMessage.builder()
                 .chatId(chatId)
-                .text("Шаг 6/" + TOTAL_STEPS + ": время начала (ЧЧ:ММ). Окончание укажется при завершении смены.")
+                .text("Шаг 6/" + TOTAL_STEPS + ": время начала (ЧЧ:ММ). Окончание указывается при завершении смены.")
                 .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
                 .build());
     }
 
     private void sendConfirmAddPartnerDeptStep(TelegramLongPollingBot bot, long chatId) throws TelegramApiException {
         List<List<InlineKeyboardButton>> rows = List.of(
-                List.of(
-                        ib("Отделение 1", PREFIX_SHIFT_ADD_DEPT + "|1"),
-                        ib("Отделение 2", PREFIX_SHIFT_ADD_DEPT + "|2")),
+                List.of(ib("Отделение 1", PREFIX_SHIFT_ADD_DEPT + "|1"), ib("Отделение 2", PREFIX_SHIFT_ADD_DEPT + "|2")),
                 List.of(ib("К подтверждению", CB_SHIFT_ADD_PARTNER_CANCEL)));
         bot.execute(SendMessage.builder()
                 .chatId(chatId)
@@ -632,8 +670,7 @@ public class ShiftCreationWizard {
                 if (it.serviceInfoId() == null || alreadyInShift.contains(it.serviceInfoId())) {
                     continue;
                 }
-                String label = it.label() == null || it.label().isBlank() ? "Сотрудник" : it.label();
-                rows.add(List.of(ib(label, PREFIX_SHIFT_ADD_COL + "|" + it.serviceInfoId())));
+                rows.add(List.of(ib(ColleagueButtonLabel.of(it), PREFIX_SHIFT_ADD_COL + "|" + it.serviceInfoId())));
                 anyPickable = true;
             }
             if (resp.hasMore()) {
@@ -641,10 +678,10 @@ public class ShiftCreationWizard {
                 rows.add(List.of(ib("Ещё…", PREFIX_SHIFT_ADD_PAGE + "|" + dept + "|" + next)));
             }
             rows.add(List.of(ib("К подтверждению", CB_SHIFT_ADD_PARTNER_CANCEL)));
-            String intro = "Добавить напарника (отделение " + dept + "). Уже в смене не показываются.";
+            String intro = "Добавить напарника (отделение " + dept + "). Уже в смене не показываются. Список из учёта актуальный.";
             if (!anyPickable) {
                 String hint = resp.hasMore()
-                        ? "На этой странице все в списке уже участвуют в смене — нажмите «Ещё…» или выберите другое отделение."
+                        ? "На этой странице все уже в смене — нажмите «Ещё…» или выберите другое отделение."
                         : "В этом отделении больше некого добавить (остальные уже в смене).";
                 bot.execute(SendMessage.builder()
                         .chatId(chatId)
@@ -676,23 +713,23 @@ public class ShiftCreationWizard {
         return out;
     }
 
-    private String resolveColleagueLabel(long chatId, Integer dept, int page, UUID serviceInfoId) {
+    private BotColleagueItemDto findColleague(long chatId, Integer dept, int page, UUID serviceInfoId) {
         if (dept == null) {
-            return "—";
+            return null;
         }
         try {
             var resp = coreProfileClient.getColleagues(chatId, dept, page);
             if (resp.items() != null) {
                 for (BotColleagueItemDto it : resp.items()) {
-                    if (serviceInfoId.equals(it.serviceInfoId()) && it.label() != null && !it.label().isBlank()) {
-                        return it.label();
+                    if (serviceInfoId.equals(it.serviceInfoId())) {
+                        return it;
                     }
                 }
             }
         } catch (CoreProfileClient.CoreProfileException e) {
-            log.debug("colleague label fetch chatId={} status={}", chatId, e.getStatus());
+            log.debug("colleague fetch chatId={} status={}", chatId, e.getStatus());
         }
-        return "—";
+        return null;
     }
 
     private void sendConfirm(TelegramLongPollingBot bot, long chatId, ShiftDraftSession s) throws TelegramApiException {
@@ -754,6 +791,7 @@ public class ShiftCreationWizard {
         return switch (id) {
             case "BAT_POST" -> "Пост батальона";
             case "VZVOD_ROUTE" -> "Маршрут взвода";
+            case "CHECKING" -> "Проверки маршрутов";
             case "Strengthening" -> "Усиление";
             default -> id;
         };
@@ -765,13 +803,14 @@ public class ShiftCreationWizard {
             return;
         }
         List<ShiftDraftSession.DraftParticipant> participants = s.getParticipants();
+        UUID primaryPartner = participants.isEmpty() ? null : participants.get(0).serviceInfoId();
         BotShiftUpsertRequestDto body = new BotShiftUpsertRequestDto(
                 s.getDate(),
                 s.getRouteId(),
                 s.getTypeOfShiftId(),
                 s.getStartTime(),
                 null,
-                participants.get(0).serviceInfoId(),
+                primaryPartner,
                 null,
                 null,
                 null,
@@ -790,8 +829,8 @@ public class ShiftCreationWizard {
                         extra.serviceInfoId(),
                         saved.countOfStatements(),
                         saved.countOfClaims(),
-                        saved.ibdWithMigrant(),
-                        saved.ibdWithoutMigrant());
+                        saved.ibdr(),
+                        saved.migrant());
                 saved = coreProfileClient.updateShift(chatId, shiftId, addBody);
             }
             store.clear(chatId);

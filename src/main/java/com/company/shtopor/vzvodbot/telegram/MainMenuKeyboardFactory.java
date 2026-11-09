@@ -44,4 +44,19 @@ public class MainMenuKeyboardFactory {
                 .resizeKeyboard(true)
                 .build();
     }
+
+    /** Клавиатура входа: «Поделиться контактом» + «Назад». */
+    public ReplyKeyboardMarkup shareContactLogin() {
+        KeyboardButton phone = KeyboardButton.builder()
+                .text("Отправить номер")
+                .requestContact(true)
+                .build();
+        return ReplyKeyboardMarkup.builder()
+                .keyboard(List.of(
+                        new KeyboardRow(List.of(phone)),
+                        new KeyboardRow(List.of(KeyboardButton.builder().text(BTN_BACK).build()))))
+                .resizeKeyboard(true)
+                .oneTimeKeyboard(true)
+                .build();
+    }
 }

@@ -19,12 +19,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Регистрация long polling после {@link ApplicationReadyEvent}: в Spring Boot строка «Started …»
  * пишется <em>до</em> {@code ApplicationRunner}, из‑за чего логи бота оказываются ниже и их легко не заметить.
+ * <p>
+ * В Docker (особенно Windows) DNS к api.telegram.org иногда недоступен в момент старта — повторяем попытки в фоне.
  */
 @Configuration
 public class TelegramBotRegisterConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramBotRegisterConfiguration.class);
+    private static final long RETRY_DELAY_MS = 15_000L;
 
+    private final AtomicBoolean registrationStarted = new AtomicBoolean(false);
     private final AtomicBoolean registrationDone = new AtomicBoolean(false);
 
     private final VzvodTelegramBot bot;
@@ -39,7 +43,7 @@ public class TelegramBotRegisterConfiguration {
 
     @EventListener(ApplicationReadyEvent.class)
     public void registerTelegramBotOnReady() {
-        if (!registrationDone.compareAndSet(false, true)) {
+        if (!registrationStarted.compareAndSet(false, true)) {
             return;
         }
         if (props.getToken() == null || props.getToken().isBlank()) {
@@ -48,30 +52,70 @@ public class TelegramBotRegisterConfiguration {
                     + "Если файл в .gitignore, выполните mvn process-resources или включите копирование ресурсов в IDE.");
             return;
         }
-        try {
-            log.info("Регистрация Telegram long polling (@{})…", props.getUsername());
-            logJvmAndAppProxyContext();
-            WebhookInfo wh = bot.execute(new GetWebhookInfo());
-            if (wh.getUrl() != null && !wh.getUrl().isBlank()) {
-                log.warn("У бота был включён webhook URL={} — отключаем до старта long polling, иначе апдейты не придут", wh.getUrl());
-                bot.execute(DeleteWebhook.builder().dropPendingUpdates(true).build());
+        Thread registerThread = new Thread(this::registerWithRetries, "telegram-bot-register");
+        registerThread.setDaemon(true);
+        registerThread.start();
+    }
+
+    private void registerWithRetries() {
+        int attempt = 0;
+        while (!registrationDone.get() && !Thread.currentThread().isInterrupted()) {
+            attempt++;
+            try {
+                registerOnce();
+                registrationDone.set(true);
+                return;
+            } catch (TelegramApiException e) {
+                if (attempt == 1) {
+                    log.error(registrationFailureHint(), e);
+                } else if (attempt % 4 == 0) {
+                    log.warn("Повторная регистрация Telegram (попытка {}): {}", attempt, rootCauseMessage(e));
+                } else {
+                    log.debug("Повторная регистрация Telegram (попытка {}): {}", attempt, rootCauseMessage(e));
+                }
+                sleepQuietly(RETRY_DELAY_MS);
             }
+        }
+    }
 
-            TelegramBotsApi api = new TelegramBotsApi(DefaultBotSession.class);
-            api.registerBot(bot);
+    private void registerOnce() throws TelegramApiException {
+        log.info("Регистрация Telegram long polling (@{})…", props.getUsername());
+        logJvmAndAppProxyContext();
+        WebhookInfo wh = bot.execute(new GetWebhookInfo());
+        if (wh.getUrl() != null && !wh.getUrl().isBlank()) {
+            log.warn("У бота был включён webhook URL={} — отключаем до старта long polling, иначе апдейты не придут", wh.getUrl());
+            bot.execute(DeleteWebhook.builder().dropPendingUpdates(true).build());
+        }
 
-            log.info("Telegram-бот в long polling: @{}, Core: {}", bot.getBotUsername(), core.getBaseUrl().replaceAll("/+$", ""));
-        } catch (TelegramApiException e) {
-            log.error(
-                    "Не удалось подключиться к Telegram Bot API (getWebhookInfo / register). "
-                            + "Без успешной регистрации /start в Telegram не обрабатывается. "
-                            + "Проверьте исходящий HTTPS к api.telegram.org:443. "
-                            + "Если VPN включён, а Java всё равно таймаутится: часто VPN не маршрутизирует произвольные приложения (split tunnel) — в клиенте VPN включите режим «для всей системы» / TUN, "
-                            + "или в настройках VPN возьмите локальный SOCKS (обычно 127.0.0.1 и порт) и задайте telegram.bot.proxy-host, proxy-port, proxy-type=SOCKS5. "
-                            + "Корпоративный HTTP-прокси: telegram.bot.proxy-* или TELEGRAM_BOT_PROXY_*. "
-                            + "В стеке SocksSocketImpl — проверьте socksProxyHost / socksProxyPort в VM options IDEA (лишний или неверный прокси даёт таймаут). "
-                            + "Приложение остаётся без long polling — перезапустите после появления маршрута к Telegram.",
-                    e);
+        TelegramBotsApi api = new TelegramBotsApi(DefaultBotSession.class);
+        api.registerBot(bot);
+
+        log.info("Telegram-бот в long polling: @{}, Core: {}", bot.getBotUsername(), core.getBaseUrl().replaceAll("/+$", ""));
+    }
+
+    private static String registrationFailureHint() {
+        return "Не удалось подключиться к Telegram Bot API (getWebhookInfo / register). "
+                + "Без успешной регистрации /start в Telegram не обрабатывается. "
+                + "Проверьте исходящий HTTPS к api.telegram.org:443. "
+                + "В Docker на Windows при UnknownHostException часто помогает перезапуск compose или явный DNS; "
+                + "бот будет повторять попытки каждые 15 с. "
+                + "Если Telegram доступен только через VPN на хосте: в .env задайте TELEGRAM_BOT_PROXY_HOST=host.docker.internal "
+                + "(не 127.0.0.1), TELEGRAM_BOT_PROXY_PORT и TELEGRAM_BOT_PROXY_TYPE=SOCKS5.";
+    }
+
+    private static String rootCauseMessage(Throwable t) {
+        Throwable c = t;
+        while (c.getCause() != null) {
+            c = c.getCause();
+        }
+        return c.getMessage() != null ? c.getMessage() : c.getClass().getSimpleName();
+    }
+
+    private static void sleepQuietly(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

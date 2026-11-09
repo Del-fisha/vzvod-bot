@@ -6,6 +6,7 @@ import com.company.shtopor.vzvodbot.core.BotShiftUpsertRequestDto;
 import com.company.shtopor.vzvodbot.core.CoreProfileClient;
 import com.company.shtopor.vzvodbot.session.ShiftQuickEditPendingStore;
 import com.company.shtopor.vzvodbot.session.ShiftQuickEditPendingStore.Pending;
+import com.company.shtopor.vzvodbot.shift.ColleagueButtonLabel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -328,8 +329,7 @@ public class ShiftQuickEditHandler {
                 if (alreadyInShift.contains(it.serviceInfoId())) {
                     continue;
                 }
-                String label = it.label() == null || it.label().isBlank() ? "Сотрудник" : it.label();
-                rows.add(List.of(ib(label, PREFIX_EDIT_PARTNER_COL + "|" + it.serviceInfoId())));
+                rows.add(List.of(ib(ColleagueButtonLabel.of(it), PREFIX_EDIT_PARTNER_COL + "|" + it.serviceInfoId())));
                 anyPickable = true;
             }
             if (resp.hasMore()) {
@@ -337,10 +337,10 @@ public class ShiftQuickEditHandler {
                 rows.add(List.of(ib("Ещё…", PREFIX_EDIT_PARTNER_MORE + "|" + next)));
             }
             rows.add(List.of(ib("Отмена", PREFIX_EDIT_CANCEL)));
-            String intro = "Добавить напарника (отделение " + dept + "). Уже в смене не показываются.";
+            String intro = "Добавить напарника (отделение " + dept + "). Уже в смене не показываются. Список из учёта актуальный.";
             if (!anyPickable) {
                 String hint = resp.hasMore()
-                        ? "На этой странице все в списке уже участвуют в смене — нажмите «Ещё…» или выберите другое отделение."
+                        ? "На этой странице все уже в смене — нажмите «Ещё…» или выберите другое отделение."
                         : "В этом отделении больше некого добавить (остальные уже в смене).";
                 bot.execute(SendMessage.builder()
                         .chatId(chatId)
@@ -438,8 +438,8 @@ public class ShiftQuickEditHandler {
                     partnerToSetOrNull,
                     cur.countOfStatements(),
                     cur.countOfClaims(),
-                    cur.ibdWithMigrant(),
-                    cur.ibdWithoutMigrant());
+                    cur.ibdr(),
+                    cur.migrant());
             BotShiftItemDto saved = coreProfileClient.updateShift(chatId, shiftId, body);
             pendingStore.clear(chatId);
             boolean partnerOnly = partnerToSetOrNull != null && newDate == null && newStart == null;

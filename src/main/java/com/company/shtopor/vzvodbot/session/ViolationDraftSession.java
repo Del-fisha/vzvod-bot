@@ -19,7 +19,15 @@ public class ViolationDraftSession {
         IMPACT
     }
 
+    /** Куда вернуться после сохранения нарушения (завершение смены). */
+    public enum AfterComplete {
+        NONE,
+        SHIFT_END_AP,
+        SHIFT_END_CRIMINAL
+    }
+
     private UUID shiftId;
+    private AfterComplete afterComplete = AfterComplete.NONE;
     private Kind kind;
     private Step step;
     private Integer articleId;
@@ -34,6 +42,14 @@ public class ViolationDraftSession {
 
     public void setShiftId(UUID shiftId) {
         this.shiftId = shiftId;
+    }
+
+    public AfterComplete getAfterComplete() {
+        return afterComplete;
+    }
+
+    public void setAfterComplete(AfterComplete afterComplete) {
+        this.afterComplete = afterComplete == null ? AfterComplete.NONE : afterComplete;
     }
 
     public Kind getKind() {

@@ -10,6 +10,7 @@ import com.company.shtopor.vzvodbot.session.ViolationDraftSession;
 import com.company.shtopor.vzvodbot.session.ViolationDraftSessionStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
@@ -41,17 +42,20 @@ public class ViolationCreationWizard {
     private final CoreProfileClient coreProfileClient;
     private final ShiftMetricsHandler shiftMetricsHandler;
     private final MainMenuKeyboardFactory mainMenuKeyboardFactory;
+    private final ShiftEndConfirmationHandler shiftEndConfirmationHandler;
 
     public ViolationCreationWizard(
             ViolationDraftSessionStore store,
             CoreProfileClient coreProfileClient,
             ShiftMetricsHandler shiftMetricsHandler,
-            MainMenuKeyboardFactory mainMenuKeyboardFactory
+            MainMenuKeyboardFactory mainMenuKeyboardFactory,
+            @Lazy ShiftEndConfirmationHandler shiftEndConfirmationHandler
     ) {
         this.store = store;
         this.coreProfileClient = coreProfileClient;
         this.shiftMetricsHandler = shiftMetricsHandler;
         this.mainMenuKeyboardFactory = mainMenuKeyboardFactory;
+        this.shiftEndConfirmationHandler = shiftEndConfirmationHandler;
     }
 
     public boolean isActive(long chatId) {
@@ -89,8 +93,14 @@ public class ViolationCreationWizard {
                     .build());
             return true;
         }
-        start(bot, chatId, openShift.get().id(), kind);
+        start(bot, chatId, openShift.get().id(), kind, ViolationDraftSession.AfterComplete.NONE);
         return true;
+    }
+
+    public void startForShiftEnd(TelegramLongPollingBot bot, long chatId, UUID shiftId,
+                                 ViolationDraftSession.Kind kind, ViolationDraftSession.AfterComplete afterComplete)
+            throws TelegramApiException {
+        start(bot, chatId, shiftId, kind, afterComplete);
     }
 
     public boolean handleCallback(TelegramLongPollingBot bot, long chatId, String data, String cqId)
@@ -100,11 +110,19 @@ public class ViolationCreationWizard {
         }
         answer(bot, cqId);
         if (CB_ABORT.equals(data)) {
+            Optional<ViolationDraftSession> abortSession = store.get(chatId);
+            ViolationDraftSession.AfterComplete after = abortSession
+                    .map(ViolationDraftSession::getAfterComplete)
+                    .orElse(ViolationDraftSession.AfterComplete.NONE);
             clear(chatId);
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
                     .text("Создание нарушения отменено.")
                     .build());
+            if (after != ViolationDraftSession.AfterComplete.NONE) {
+                shiftEndConfirmationHandler.resumeAfterViolation(chatId, after);
+                shiftEndConfirmationHandler.sendResumeStep(bot, chatId);
+            }
             return true;
         }
         Optional<ViolationDraftSession> opt = store.get(chatId);
@@ -145,13 +163,15 @@ public class ViolationCreationWizard {
         return true;
     }
 
-    private void start(TelegramLongPollingBot bot, long chatId, UUID shiftId, ViolationDraftSession.Kind kind)
+    private void start(TelegramLongPollingBot bot, long chatId, UUID shiftId, ViolationDraftSession.Kind kind,
+                       ViolationDraftSession.AfterComplete afterComplete)
             throws TelegramApiException {
         try {
             BotViolationOptionsResponseDto options = coreProfileClient.getViolationOptions();
             ViolationDraftSession session = new ViolationDraftSession();
             session.setShiftId(shiftId);
             session.setKind(kind);
+            session.setAfterComplete(afterComplete);
             session.setOptions(options);
             if (kind == ViolationDraftSession.Kind.ADMINISTRATIVE) {
                 session.setStep(ViolationDraftSession.Step.ARTICLE);
@@ -198,14 +218,35 @@ public class ViolationCreationWizard {
             throws TelegramApiException {
         bot.execute(SendMessage.builder()
                 .chatId(chatId)
-                .text("Шаг 2/2: выберите воздействие.")
-                .replyMarkup(optionKeyboard(session.getImpacts(), PREFIX_IMPACT))
+                .text("Применялось ли что-то из этого?")
+                .replyMarkup(impactKeyboard(session.getImpacts()))
                 .build());
+    }
+
+    private static InlineKeyboardMarkup impactKeyboard(List<BotEnumOptionDto> options) {
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        for (BotEnumOptionDto option : options) {
+            rows.add(List.of(ib(impactButtonLabel(option.id()), PREFIX_IMPACT + "|" + option.id())));
+        }
+        rows.add(List.of(ib("Отмена", CB_ABORT)));
+        return InlineKeyboardMarkup.builder().keyboard(rows).build();
+    }
+
+    private static String impactButtonLabel(int impactId) {
+        return switch (impactId) {
+            case 0 -> "Не применялось";
+            case 1 -> "Физ. сила";
+            case 2 -> "Физ. сила и спец. ср-ва";
+            case 3 -> "Спец. ср-ва";
+            case 4 -> "Оружие";
+            default -> "—";
+        };
     }
 
     private void submit(TelegramLongPollingBot bot, long chatId, ViolationDraftSession session, int impactId)
             throws TelegramApiException {
         UUID shiftId = session.getShiftId();
+        ViolationDraftSession.AfterComplete afterComplete = session.getAfterComplete();
         try {
             BotShiftItemDto saved;
             if (session.getKind() == ViolationDraftSession.Kind.ADMINISTRATIVE) {
@@ -220,6 +261,18 @@ public class ViolationCreationWizard {
                         new BotCriminalViolationCreateRequestDto(impactId, session.getTypeId()));
             }
             clear(chatId);
+            if (afterComplete != ViolationDraftSession.AfterComplete.NONE) {
+                shiftEndConfirmationHandler.resumeAfterViolation(chatId, afterComplete);
+                String kindLabel = session.getKind() == ViolationDraftSession.Kind.ADMINISTRATIVE
+                        ? "Административное нарушение"
+                        : "Уголовное нарушение";
+                bot.execute(SendMessage.builder()
+                        .chatId(chatId)
+                        .text(kindLabel + " сохранено.")
+                        .build());
+                shiftEndConfirmationHandler.sendResumeStep(bot, chatId);
+                return;
+            }
             String kindLabel = session.getKind() == ViolationDraftSession.Kind.ADMINISTRATIVE
                     ? "Административное нарушение"
                     : "Уголовное нарушение";
@@ -230,6 +283,9 @@ public class ViolationCreationWizard {
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
             clear(chatId);
+            if (afterComplete != ViolationDraftSession.AfterComplete.NONE) {
+                shiftEndConfirmationHandler.clear(chatId);
+            }
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
                     .text(e.userHint())
@@ -237,6 +293,9 @@ public class ViolationCreationWizard {
                     .build());
         } catch (Exception e) {
             clear(chatId);
+            if (afterComplete != ViolationDraftSession.AfterComplete.NONE) {
+                shiftEndConfirmationHandler.clear(chatId);
+            }
             log.error("Создание нарушения chatId={}", chatId, e);
             bot.execute(SendMessage.builder()
                     .chatId(chatId)

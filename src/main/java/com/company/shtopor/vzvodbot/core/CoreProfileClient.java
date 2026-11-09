@@ -104,10 +104,28 @@ public class CoreProfileClient {
                 .body(body), BotShiftItemDto.class);
     }
 
-    public BotShiftItemDto adjustIbdWithMigrant(long telegramChatId, java.util.UUID shiftId,
+    public BotShiftItemDto adjustIbdr(long telegramChatId, java.util.UUID shiftId,
                                                 BotShiftMetricDeltaRequestDto body) {
         return jsonBody(restClient.post()
-                .uri("/api/bot/me/shifts/{id}/ibd-with-migrant", shiftId)
+                .uri("/api/bot/me/shifts/{id}/ibdr", shiftId)
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body), BotShiftItemDto.class);
+    }
+
+    public BotShiftItemDto adjustMigrant(long telegramChatId, java.util.UUID shiftId,
+                                         BotShiftMetricDeltaRequestDto body) {
+        return jsonBody(restClient.post()
+                .uri("/api/bot/me/shifts/{id}/migrant", shiftId)
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body), BotShiftItemDto.class);
+    }
+
+    public BotShiftItemDto adjustMigrantAndIbdr(long telegramChatId, java.util.UUID shiftId,
+                                                BotShiftMetricDeltaRequestDto body) {
+        return jsonBody(restClient.post()
+                .uri("/api/bot/me/shifts/{id}/migrant-and-ibdr", shiftId)
                 .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body), BotShiftItemDto.class);
@@ -120,6 +138,21 @@ public class CoreProfileClient {
                 .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body), BotShiftItemDto.class);
+    }
+
+    public BotCheckableRoutesResponseDto getCheckableRoutes(long telegramChatId, java.util.UUID shiftId) {
+        return jsonBody(restClient.get()
+                .uri("/api/bot/me/shifts/{id}/checkable-routes", shiftId)
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId)), BotCheckableRoutesResponseDto.class);
+    }
+
+    public BotRouteCheckItemDto recordRouteCheck(long telegramChatId, java.util.UUID shiftId,
+                                                 BotRouteCheckCreateRequestDto body) {
+        return jsonBody(restClient.post()
+                .uri("/api/bot/me/shifts/{id}/route-checks", shiftId)
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body), BotRouteCheckItemDto.class);
     }
 
     public BotViolationOptionsResponseDto getViolationOptions() {

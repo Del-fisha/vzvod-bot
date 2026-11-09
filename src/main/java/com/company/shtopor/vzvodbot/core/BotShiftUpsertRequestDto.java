@@ -16,7 +16,7 @@ public record BotShiftUpsertRequestDto(
         UUID partnerServiceInfoId,
         Integer countOfStatements,
         Integer countOfClaims,
-        Integer ibdWithMigrant,
-        Integer ibdWithoutMigrant
+        Integer ibdr,
+        Integer migrant
 ) {
 }

@@ -1,5 +1,6 @@
 package com.company.shtopor.vzvodbot.telegram;
 
+import com.company.shtopor.vzvodbot.logging.RemoteLoggingClient;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
@@ -10,18 +11,21 @@ public class TelegramOutboundService {
     private static final int MAX_MESSAGE_LENGTH = 4000;
 
     private final VzvodTelegramBot bot;
+    private final RemoteLoggingClient remoteLogging;
 
-    public TelegramOutboundService(VzvodTelegramBot bot) {
+    public TelegramOutboundService(VzvodTelegramBot bot, RemoteLoggingClient remoteLogging) {
         this.bot = bot;
+        this.remoteLogging = remoteLogging;
     }
 
     public void sendText(long chatId, String text) {
         try {
-            bot.execute(SendMessage.builder()
+            bot.sendAndLog(SendMessage.builder()
                     .chatId(String.valueOf(chatId))
                     .text(truncate(text))
                     .build());
         } catch (TelegramApiException e) {
+            remoteLogging.logError("Ошибка отправки в Telegram (chat %d): %s".formatted(chatId, e.getMessage()));
             throw new IllegalStateException("Failed to send telegram message", e);
         }
     }

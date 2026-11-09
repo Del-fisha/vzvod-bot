@@ -6,22 +6,21 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.Optional;
-import java.util.UUID;
 
 @Component
-public class ShiftEndAwaitingStore {
+public class ShiftEndConfirmSessionStore {
 
-    private final Cache<Long, UUID> cache = Caffeine.newBuilder()
+    private final Cache<Long, ShiftEndConfirmSession> cache = Caffeine.newBuilder()
             .maximumSize(50_000)
             .expireAfterAccess(Duration.ofMinutes(25))
             .build();
 
-    public Optional<UUID> get(long chatId) {
+    public Optional<ShiftEndConfirmSession> get(long chatId) {
         return Optional.ofNullable(cache.getIfPresent(chatId));
     }
 
-    public void put(long chatId, UUID shiftId) {
-        cache.put(chatId, shiftId);
+    public void put(long chatId, ShiftEndConfirmSession session) {
+        cache.put(chatId, session);
     }
 
     public void clear(long chatId) {

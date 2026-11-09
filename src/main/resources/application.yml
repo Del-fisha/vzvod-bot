@@ -22,6 +22,11 @@ internal:
   api:
     token: ${INTERNAL_API_TOKEN:}
 
+app:
+  logging-service:
+    base-url: ${LOGGING_MICROSERVICE_URL:http://localhost:8085}
+    ingest-token: ${LOGGING_INGEST_TOKEN:}
+
 vzvod:
   core:
     # Jmix Core (профиль test-postgres по умолчанию слушает :8080).
