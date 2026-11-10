@@ -128,7 +128,8 @@ public class ShiftQuickEditHandler {
                             .build());
                     return true;
                 }
-                sendPartnerDeptStep(bot, chatId, shiftId);
+                pendingStore.put(chatId, Pending.partnerPick(shiftId, 1, 0));
+                sendPartnerColleagueStep(bot, chatId, shiftId, 1, 0);
             } catch (IllegalArgumentException e) {
                 log.debug("bad sxnp {}", data);
             } catch (CoreProfileClient.CoreProfileException e) {
@@ -316,7 +317,7 @@ public class ShiftQuickEditHandler {
             if (items.isEmpty()) {
                 bot.execute(SendMessage.builder()
                         .chatId(chatId)
-                        .text("В выбранном отделении нет других сотрудников в строю. Выберите другое отделение («Отмена»).")
+                        .text("Нет сотрудников в строю, свободных от смены.")
                         .build());
                 return;
             }
@@ -337,7 +338,7 @@ public class ShiftQuickEditHandler {
                 rows.add(List.of(ib("Ещё…", PREFIX_EDIT_PARTNER_MORE + "|" + next)));
             }
             rows.add(List.of(ib("Отмена", PREFIX_EDIT_CANCEL)));
-            String intro = "Добавить напарника (отделение " + dept + "). Уже в смене не показываются. Список из учёта актуальный.";
+            String intro = "Добавить напарника. Сначала ваше отделение, затем другое. Уже в смене не показываются.";
             if (!anyPickable) {
                 String hint = resp.hasMore()
                         ? "На этой странице все уже в смене — нажмите «Ещё…» или выберите другое отделение."

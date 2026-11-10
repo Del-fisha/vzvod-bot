@@ -32,15 +32,15 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
- * Мастер создания смены: дата → маршрут → тип → отделение напарника → коллега
- * (актуальный список из Core) → время начала → подтверждение, затем POST в Core.
+ * Мастер создания смены: дата → маршрут → тип → коллеги
+ * (все «в строю» и не занятые в смене, своё отделение сверху) → время начала → подтверждение.
  */
 @Component
 public class ShiftCreationWizard {
 
     private static final Logger log = LoggerFactory.getLogger(ShiftCreationWizard.class);
 
-    private static final int TOTAL_STEPS = 6;
+    private static final int TOTAL_STEPS = 5;
 
     static final String CB_SHIFT_NEW = "shift_new";
     private static final String PREFIX_SHIFT_DATE = "sdt";
@@ -256,10 +256,11 @@ public class ShiftCreationWizard {
             if (s.getStep() != 6) {
                 return true;
             }
-            s.setConfirmPartnerPicker(ShiftDraftSession.ConfirmPartnerPicker.DEPARTMENT);
+            s.setPartnerDepartment(1);
             s.setColleaguePage(0);
+            s.setConfirmPartnerPicker(ShiftDraftSession.ConfirmPartnerPicker.COLLEAGUE);
             store.put(chatId, s);
-            sendConfirmAddPartnerDeptStep(bot, chatId);
+            sendConfirmAddPartnerColleagueStep(bot, chatId, s);
             return true;
         }
         if (CB_SHIFT_ADD_PARTNER_CANCEL.equals(data)) {
@@ -389,17 +390,17 @@ public class ShiftCreationWizard {
                 return true;
             }
             s.setTypeOfShiftId(typeId);
-            s.setPartnerDepartment(null);
+            s.setPartnerDepartment(1);
             s.setColleaguePage(0);
             s.clearParticipants();
-            s.setStep(3);
+            s.setStep(4);
             store.put(chatId, s);
-            sendDepartmentStep(bot, chatId, s);
+            sendColleagueStep(bot, chatId, s);
             return true;
         }
         if (CB_SHIFT_NO_PARTNER.equals(data)) {
             answer(bot, cqId);
-            if (s.getStep() != 3 || !"CHECKING".equals(s.getTypeOfShiftId())) {
+            if (s.getStep() != 3 && s.getStep() != 4) {
                 return true;
             }
             s.clearParticipants();
@@ -547,7 +548,8 @@ public class ShiftCreationWizard {
                         ib("Маршрут взвода", PREFIX_SHIFT_TYPE + "|VZVOD_ROUTE")),
                 List.of(
                         ib("Проверки", PREFIX_SHIFT_TYPE + "|CHECKING"),
-                        ib("Усиление", PREFIX_SHIFT_TYPE + "|Strengthening")));
+                        ib("Усиление", PREFIX_SHIFT_TYPE + "|Strengthening")),
+                List.of(ib("На базах", PREFIX_SHIFT_TYPE + "|ON_BASES")));
         bot.execute(SendMessage.builder()
                 .chatId(chatId)
                 .text("Шаг 3/" + TOTAL_STEPS + ": тип наряда.")
@@ -559,15 +561,10 @@ public class ShiftCreationWizard {
             throws TelegramApiException {
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(List.of(ib("Отделение 1", PREFIX_SHIFT_DEPT + "|1"), ib("Отделение 2", PREFIX_SHIFT_DEPT + "|2")));
-        if ("CHECKING".equals(s.getTypeOfShiftId())) {
-            rows.add(List.of(ib("Без напарника (одному)", CB_SHIFT_NO_PARTNER)));
-        }
+        rows.add(List.of(ib("Без напарника (одному)", CB_SHIFT_NO_PARTNER)));
         bot.execute(SendMessage.builder()
                 .chatId(chatId)
-                .text("Шаг 4/" + TOTAL_STEPS + ": отделение напарника по смене"
-                        + ("CHECKING".equals(s.getTypeOfShiftId())
-                        ? " (для проверок можно одному)."
-                        : "."))
+                .text("Шаг 4/" + TOTAL_STEPS + ": отделение напарника по смене. Можно выйти одному.")
                 .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
                 .build());
     }
@@ -581,22 +578,11 @@ public class ShiftCreationWizard {
     }
 
     private void sendColleagueStep(TelegramLongPollingBot bot, long chatId, ShiftDraftSession s) throws TelegramApiException {
-        Integer dept = s.getPartnerDepartment();
-        if (dept == null) {
-            sendDepartmentStep(bot, chatId);
-            return;
-        }
+        int dept = s.getPartnerDepartment() == null ? 1 : s.getPartnerDepartment();
         try {
             // Каждый вход в меню — свежий список из Core (новые сотрудники появляются без пересборки бота).
             var resp = coreProfileClient.getColleagues(chatId, dept, s.getColleaguePage());
             List<BotColleagueItemDto> items = resp.items() == null ? List.of() : resp.items();
-            if (items.isEmpty()) {
-                bot.execute(SendMessage.builder()
-                        .chatId(chatId)
-                        .text("В выбранном отделении нет других сотрудников в строю. Выберите другое отделение («Назад»).")
-                        .build());
-                return;
-            }
             List<List<InlineKeyboardButton>> rows = new ArrayList<>();
             for (BotColleagueItemDto it : items) {
                 if (it.serviceInfoId() == null) {
@@ -604,14 +590,17 @@ public class ShiftCreationWizard {
                 }
                 rows.add(List.of(ib(ColleagueButtonLabel.of(it), PREFIX_SHIFT_COLLEAGUE + "|" + it.serviceInfoId())));
             }
+            rows.add(List.of(ib("Без напарника (одному)", CB_SHIFT_NO_PARTNER)));
             if (resp.hasMore()) {
                 int next = s.getColleaguePage() + 1;
                 rows.add(List.of(ib("Ещё…", PREFIX_SHIFT_COLPAGE + "|" + dept + "|" + next)));
             }
+            String emptyNote = items.isEmpty()
+                    ? "Свободных сотрудников в строю нет. Можно выйти одному."
+                    : "Напарник необязателен. Сначала ваше отделение, затем другое, внутри — по фамилии. Занятые в смене скрыты.";
             bot.execute(SendMessage.builder()
                     .chatId(chatId)
-                    .text("Шаг 5/" + TOTAL_STEPS + ": напарник (отделение " + dept + ").\n"
-                            + "Список подгружается из учёта при каждом открытии.")
+                    .text("Шаг 4/" + TOTAL_STEPS + ": напарник.\n" + emptyNote)
                     .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
                     .build());
         } catch (CoreProfileClient.CoreProfileException e) {
@@ -630,7 +619,7 @@ public class ShiftCreationWizard {
                         ib("11:00", PREFIX_SHIFT_TSTART + "|1100")));
         bot.execute(SendMessage.builder()
                 .chatId(chatId)
-                .text("Шаг 6/" + TOTAL_STEPS + ": время начала (ЧЧ:ММ). Окончание указывается при завершении смены.")
+                .text("Шаг 5/" + TOTAL_STEPS + ": время начала (ЧЧ:ММ). Окончание указывается при завершении смены.")
                 .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
                 .build());
     }
@@ -660,7 +649,7 @@ public class ShiftCreationWizard {
             if (items.isEmpty()) {
                 bot.execute(SendMessage.builder()
                         .chatId(chatId)
-                        .text("В выбранном отделении нет других сотрудников в строю. Выберите другое отделение.")
+                        .text("Нет сотрудников в строю, свободных от смены.")
                         .build());
                 return;
             }
@@ -678,7 +667,7 @@ public class ShiftCreationWizard {
                 rows.add(List.of(ib("Ещё…", PREFIX_SHIFT_ADD_PAGE + "|" + dept + "|" + next)));
             }
             rows.add(List.of(ib("К подтверждению", CB_SHIFT_ADD_PARTNER_CANCEL)));
-            String intro = "Добавить напарника (отделение " + dept + "). Уже в смене не показываются. Список из учёта актуальный.";
+            String intro = "Добавить напарника. Сначала ваше отделение, затем другое. Уже в смене не показываются.";
             if (!anyPickable) {
                 String hint = resp.hasMore()
                         ? "На этой странице все уже в смене — нажмите «Ещё…» или выберите другое отделение."
@@ -755,7 +744,7 @@ public class ShiftCreationWizard {
     private static String partnerConfirmLine(ShiftDraftSession s) {
         List<ShiftDraftSession.DraftParticipant> participants = s.getParticipants();
         if (participants.isEmpty()) {
-            return "• Напарники: —";
+            return "• Напарники: нет (одному)";
         }
         if (participants.size() == 1) {
             ShiftDraftSession.DraftParticipant p = participants.get(0);
@@ -793,6 +782,7 @@ public class ShiftCreationWizard {
             case "VZVOD_ROUTE" -> "Маршрут взвода";
             case "CHECKING" -> "Проверки маршрутов";
             case "Strengthening" -> "Усиление";
+            case "ON_BASES" -> "На базах";
             default -> id;
         };
     }
