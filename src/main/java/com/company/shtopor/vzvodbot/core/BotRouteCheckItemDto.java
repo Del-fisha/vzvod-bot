@@ -10,6 +10,7 @@ public record BotRouteCheckItemDto(
         UUID id,
         LocalTime checkedAt,
         String checkerLabel,
-        String display
+        String display,
+        UUID checkerServiceInfoId
 ) {
 }

@@ -62,6 +62,8 @@ class TelegramLogActorResolverTest {
                 null,
                 null,
                 null,
+                null,
+                null,
                 null
         ));
 

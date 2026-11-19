@@ -83,6 +83,8 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private final ShiftEndTimeHandler shiftEndTimeHandler;
     private final ShiftQuickEditHandler shiftQuickEditHandler;
     private final ShiftMetricsHandler shiftMetricsHandler;
+    private final RouteCheckEditHandler routeCheckEditHandler;
+    private final StaffBrowseHandler staffBrowseHandler;
     private final ViolationCreationWizard violationWizard;
     private final MainMenuKeyboardFactory mainMenuKeyboardFactory;
     private final TelegramBotSessionCleaner sessionCleaner;
@@ -100,6 +102,8 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             ShiftEndTimeHandler shiftEndTimeHandler,
             ShiftQuickEditHandler shiftQuickEditHandler,
             ShiftMetricsHandler shiftMetricsHandler,
+            RouteCheckEditHandler routeCheckEditHandler,
+            StaffBrowseHandler staffBrowseHandler,
             ViolationCreationWizard violationWizard,
             MainMenuKeyboardFactory mainMenuKeyboardFactory,
             TelegramBotSessionCleaner sessionCleaner,
@@ -117,6 +121,8 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         this.shiftEndTimeHandler = shiftEndTimeHandler;
         this.shiftQuickEditHandler = shiftQuickEditHandler;
         this.shiftMetricsHandler = shiftMetricsHandler;
+        this.routeCheckEditHandler = routeCheckEditHandler;
+        this.staffBrowseHandler = staffBrowseHandler;
         this.violationWizard = violationWizard;
         this.mainMenuKeyboardFactory = mainMenuKeyboardFactory;
         this.sessionCleaner = sessionCleaner;
@@ -145,6 +151,8 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         shiftEndTimeHandler.clearAwaiting(chatId);
         shiftQuickEditHandler.clear(chatId);
         violationWizard.clear(chatId);
+        routeCheckEditHandler.clear(chatId);
+        staffBrowseHandler.clear(chatId);
     }
 
     private void clearLocalSession(long chatId) {
@@ -235,6 +243,15 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                     return;
                 }
                 if (sessions.find(chatId).isPresent()
+                        && routeCheckEditHandler.handleMessage(
+                        this, chatId, text, mainMenuKeyboardFactory.build(chatId))) {
+                    return;
+                }
+                if (sessions.find(chatId).isPresent()
+                        && staffBrowseHandler.handleMessage(this, chatId, text)) {
+                    return;
+                }
+                if (sessions.find(chatId).isPresent()
                         && shiftMetricsHandler.handleMainMenuButton(this, chatId, text, mainMenuKeyboardFactory.build(chatId))) {
                     return;
                 }
@@ -309,6 +326,8 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     }
 
     private void handleReplyBack(Long chatId) throws TelegramApiException {
+        routeCheckEditHandler.clear(chatId);
+        staffBrowseHandler.clear(chatId);
         if (pendingInputs.get(chatId).orElse(null) == PendingBotInput.BREASTPLATE) {
             pendingInputs.clear(chatId);
             handleEditProfileMenu(chatId);
@@ -418,15 +437,24 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     }
 
     private void handleMenuDialog(Long chatId) throws TelegramApiException {
+        boolean commander = false;
+        try {
+            BotProfileDto profile = coreProfileClient.getProfile(chatId);
+            commander = profile != null && Boolean.TRUE.equals(profile.fullAccess());
+        } catch (Exception e) {
+            log.debug("Не удалось определить роль для меню chatId={}", chatId);
+        }
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(List.of(ib("📋 Профиль", MainMenuKeyboardFactory.CB_MENU_PROFILE)));
+        if (commander) {
+            rows.add(List.of(ib("👥 Сотрудник", StaffBrowseHandler.CB_OPEN)));
+        }
+        rows.add(List.of(ib("🏖 Отпуска", MainMenuKeyboardFactory.CB_MENU_VACATIONS)));
+        rows.add(List.of(ib("📅 Возможные мероприятия", MainMenuKeyboardFactory.CB_MENU_EVENTS)));
         sendAndLog(SendMessage.builder()
                 .chatId(chatId)
                 .text("Выберите раздел:")
-                .replyMarkup(InlineKeyboardMarkup.builder()
-                        .keyboard(List.of(
-                                List.of(ib("📋 Профиль", MainMenuKeyboardFactory.CB_MENU_PROFILE)),
-                                List.of(ib("🏖 Отпуска", MainMenuKeyboardFactory.CB_MENU_VACATIONS)),
-                                List.of(ib("📅 Возможные мероприятия", MainMenuKeyboardFactory.CB_MENU_EVENTS))))
-                        .build())
+                .replyMarkup(InlineKeyboardMarkup.builder().keyboard(rows).build())
                 .build());
     }
 
@@ -635,6 +663,18 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             return;
         }
 
+        if (routeCheckEditHandler.matches(data)) {
+            staffBrowseHandler.clear(chatId);
+            if (routeCheckEditHandler.handleCallback(this, chatId, data, cqId)) {
+                return;
+            }
+        }
+        if (staffBrowseHandler.matches(data)) {
+            routeCheckEditHandler.clear(chatId);
+            if (staffBrowseHandler.handleCallback(this, chatId, data, cqId)) {
+                return;
+            }
+        }
         if (shiftWizard.handleCallback(this, chatId, data, cqId)) {
             return;
         }
@@ -1181,15 +1221,26 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                 .build());
     }
 
-    private static String formatProfile(BotProfileDto p) {
+    static String formatProfile(BotProfileDto p) {
+        return formatProfile(p, "📋 Профиль", true);
+    }
+
+    static String formatProfile(BotProfileDto p, String title, boolean own) {
         StringBuilder sb = new StringBuilder();
-        sb.append("📋 Профиль\n\n");
+        sb.append(title).append("\n\n");
         sb.append("ФИО: ").append(Optional.ofNullable(p.displayName()).orElse("—")).append('\n');
+        sb.append("Дата рождения: ")
+                .append(p.dateOfBirth() != null ? p.dateOfBirth().format(DATE_RU) : "—")
+                .append('\n');
         sb.append("Должность: ").append(Optional.ofNullable(p.post()).orElse("—")).append('\n');
         sb.append("Звание: ").append(Optional.ofNullable(p.rank()).orElse("—")).append('\n');
         sb.append("Отделение: ").append(Optional.ofNullable(p.department()).orElse("—")).append('\n');
         sb.append("Нагрудный знак: ").append(Optional.ofNullable(p.breastplate()).orElse("—")).append('\n');
-        sb.append("Телефон: ").append(Optional.ofNullable(p.mobilePhoneMasked()).orElse("не указан")).append(" (изменение только в учётной системе)\n");
+        sb.append("Телефон: ").append(Optional.ofNullable(p.mobilePhoneMasked()).orElse("не указан"));
+        if (own) {
+            sb.append(" (изменение только в учётной системе)");
+        }
+        sb.append('\n');
         sb.append("Регистрация: ").append(addressLine(p.registration())).append('\n');
         sb.append("Проживание: ").append(addressLine(p.habitation())).append('\n');
         boolean med = p.medicalExamination() != null && p.medicalExamination();
@@ -1202,7 +1253,9 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         } else {
             sb.append("Удостоверение: данные не заполнены");
         }
-        sb.append("\n\nРедактирование адресов и служебных полей: /edit_profile");
+        if (own) {
+            sb.append("\n\nРедактирование адресов и служебных полей: /edit_profile");
+        }
         return sb.toString();
     }
 

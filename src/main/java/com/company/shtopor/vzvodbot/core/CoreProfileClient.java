@@ -155,6 +155,47 @@ public class CoreProfileClient {
                 .body(body), BotRouteCheckItemDto.class);
     }
 
+    public BotRouteCheckItemDto updateRouteCheck(long telegramChatId, java.util.UUID checkId,
+                                                 BotRouteCheckUpdateRequestDto body) {
+        return jsonBody(restClient.put()
+                .uri("/api/bot/me/route-checks/{checkId}", checkId)
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body), BotRouteCheckItemDto.class);
+    }
+
+    public void deleteRouteCheck(long telegramChatId, java.util.UUID checkId) {
+        voidStatus(restClient.delete()
+                .uri("/api/bot/me/route-checks/{checkId}", checkId)
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId)));
+    }
+
+    public BotStaffPageDto getStaff(long telegramChatId, String query, int page, int pageSize) {
+        return jsonBody(restClient.get()
+                .uri(builder -> {
+                    var b = builder.path("/api/bot/me/staff")
+                            .queryParam("page", page)
+                            .queryParam("pageSize", pageSize);
+                    if (query != null && !query.isBlank()) {
+                        b.queryParam("q", query.trim());
+                    }
+                    return b.build();
+                })
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId)), BotStaffPageDto.class);
+    }
+
+    public BotProfileDto getStaffProfile(long telegramChatId, java.util.UUID userId) {
+        return jsonBody(restClient.get()
+                .uri("/api/bot/me/staff/{userId}/profile", userId)
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId)), BotProfileDto.class);
+    }
+
+    public BotStaffWorkDto getStaffWork(long telegramChatId, java.util.UUID userId) {
+        return jsonBody(restClient.get()
+                .uri("/api/bot/me/staff/{userId}/work", userId)
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId)), BotStaffWorkDto.class);
+    }
+
     public BotViolationOptionsResponseDto getViolationOptions() {
         return jsonBody(restClient.get()
                 .uri("/api/bot/me/violation-options"), BotViolationOptionsResponseDto.class);
@@ -176,6 +217,21 @@ public class CoreProfileClient {
                 .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body), BotShiftItemDto.class);
+    }
+
+    private void voidStatus(RestClient.RequestHeadersSpec<?> request) {
+        try {
+            request.retrieve()
+                    .onStatus(HttpStatusCode::isError, (req, res) -> {
+                        String body = new String(res.getBody().readAllBytes());
+                        throw new CoreProfileException(res.getStatusCode().value(), body);
+                    })
+                    .toBodilessEntity();
+        } catch (CoreProfileException e) {
+            throw e;
+        } catch (RestClientException e) {
+            throw toClientException(e);
+        }
     }
 
     private <T> T jsonBody(RestClient.RequestHeadersSpec<?> request, Class<T> type) {

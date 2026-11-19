@@ -8,7 +8,8 @@ import java.util.UUID;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record BotCheckableRoutesResponseDto(
-        List<BotCheckableRouteItemDto> routes
+        List<BotCheckableRouteItemDto> routes,
+        List<BotRouteCheckerOptionDto> commanders
 ) {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record BotCheckableRouteItemDto(
@@ -23,7 +24,15 @@ public record BotCheckableRoutesResponseDto(
             UUID id,
             LocalTime checkedAt,
             String checkerLabel,
-            String display
+            String display,
+            UUID checkerServiceInfoId
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record BotRouteCheckerOptionDto(
+            UUID serviceInfoId,
+            String label
     ) {
     }
 }

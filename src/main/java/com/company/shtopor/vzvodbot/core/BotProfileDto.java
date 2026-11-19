@@ -18,6 +18,8 @@ public record BotProfileDto(
         BotAddressDto registration,
         BotAddressDto habitation,
         LocalDate idCardIssued,
-        LocalDate idCardUntil
+        LocalDate idCardUntil,
+        Boolean fullAccess,
+        LocalDate dateOfBirth
 ) {
 }

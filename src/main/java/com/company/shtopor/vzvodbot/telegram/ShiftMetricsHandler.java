@@ -119,6 +119,8 @@ public class ShiftMetricsHandler {
         } catch (Exception e) {
             log.debug("Не удалось загрузить маршруты для проверок chatId={}", chatId, e);
         }
+        rows.add(new KeyboardRow(List.of(
+                KeyboardButton.builder().text(RouteCheckEditHandler.BTN_EDIT_CHECKS).build())));
     }
 
     static String routeCheckButton(BotCheckableRoutesResponseDto.BotCheckableRouteItemDto route) {
