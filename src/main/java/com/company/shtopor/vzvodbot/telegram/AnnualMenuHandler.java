@@ -56,7 +56,7 @@ public class AnnualMenuHandler {
                 List.of(button("ЦПД", CPD)),
                 List.of(button("Зачёты", TESTS)),
                 List.of(button("Психолог", PSY)),
-                List.of(button("Другие сотрудники", OTHERS))
+                List.of(button("Результаты коллег", OTHERS))
         );
         send(bot, chatId, "Ежегодно", rows);
     }
@@ -165,24 +165,25 @@ public class AnnualMenuHandler {
                 if (text.length() > 0) {
                     text.append('\n');
                 }
-                text.append(departmentTitle(person.departmentNumber())).append("\n\n");
+                text.append(escape(departmentTitle(person.departmentNumber()))).append("\n\n");
                 previous = person.departmentNumber();
                 first = false;
             }
-            text.append(person.shortFio()).append('\n');
+            text.append("<b>").append(escape(person.shortFio())).append("</b>\n");
             if (person.lines() != null) {
                 for (AnnualLineDto line : person.lines()) {
-                    text.append(line.title()).append(": ").append(line.text()).append('\n');
+                    text.append("<b><u>").append(escape(line.title())).append("</u></b>:\n");
+                    text.append(escape(line.text())).append('\n');
                 }
             }
             text.append("────────\n");
             if (text.length() > 3200) {
-                send(bot, chatId, text.toString().trim(), List.of());
+                send(bot, chatId, text.toString().trim(), List.of(), true);
                 text.setLength(0);
             }
         }
         send(bot, chatId, text.length() == 0 ? "Ежегодно" : text.toString().trim(),
-                List.of(List.of(button("Ежегодно", CB_OPEN))));
+                List.of(List.of(button("Ежегодно", CB_OPEN))), true);
     }
 
     private static void appendGroup(StringBuilder text, AnnualBoardDto board, String group) {
@@ -218,10 +219,30 @@ public class AnnualMenuHandler {
 
     private static void send(TelegramLongPollingBot bot, long chatId, String text, List<List<InlineKeyboardButton>> rows)
             throws TelegramApiException {
+        send(bot, chatId, text, rows, false);
+    }
+
+    private static void send(
+            TelegramLongPollingBot bot,
+            long chatId,
+            String text,
+            List<List<InlineKeyboardButton>> rows,
+            boolean html
+    ) throws TelegramApiException {
         SendMessage.SendMessageBuilder builder = SendMessage.builder().chatId(chatId).text(text);
+        if (html) {
+            builder.parseMode("HTML");
+        }
         if (rows != null && !rows.isEmpty()) {
             builder.replyMarkup(InlineKeyboardMarkup.builder().keyboard(new ArrayList<>(rows)).build());
         }
         bot.execute(builder.build());
+    }
+
+    static String escape(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 }
