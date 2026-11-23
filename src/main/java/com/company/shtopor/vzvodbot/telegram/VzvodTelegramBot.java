@@ -85,6 +85,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
     private final ShiftMetricsHandler shiftMetricsHandler;
     private final RouteCheckEditHandler routeCheckEditHandler;
     private final StaffBrowseHandler staffBrowseHandler;
+    private final AnnualMenuHandler annualMenuHandler;
     private final ViolationCreationWizard violationWizard;
     private final MainMenuKeyboardFactory mainMenuKeyboardFactory;
     private final TelegramBotSessionCleaner sessionCleaner;
@@ -104,6 +105,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             ShiftMetricsHandler shiftMetricsHandler,
             RouteCheckEditHandler routeCheckEditHandler,
             StaffBrowseHandler staffBrowseHandler,
+            AnnualMenuHandler annualMenuHandler,
             ViolationCreationWizard violationWizard,
             MainMenuKeyboardFactory mainMenuKeyboardFactory,
             TelegramBotSessionCleaner sessionCleaner,
@@ -123,6 +125,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         this.shiftMetricsHandler = shiftMetricsHandler;
         this.routeCheckEditHandler = routeCheckEditHandler;
         this.staffBrowseHandler = staffBrowseHandler;
+        this.annualMenuHandler = annualMenuHandler;
         this.violationWizard = violationWizard;
         this.mainMenuKeyboardFactory = mainMenuKeyboardFactory;
         this.sessionCleaner = sessionCleaner;
@@ -446,6 +449,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         }
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(List.of(ib("📋 Профиль", MainMenuKeyboardFactory.CB_MENU_PROFILE)));
+        rows.add(List.of(ib("Ежегодно", AnnualMenuHandler.CB_OPEN)));
         if (commander) {
             rows.add(List.of(ib("👥 Сотрудник", StaffBrowseHandler.CB_OPEN)));
         }
@@ -654,6 +658,11 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
             answerCallback(cqId);
             handlePossibleEvents(chatId);
             return;
+        }
+        if (annualMenuHandler.matches(data)) {
+            if (annualMenuHandler.handleCallback(this, chatId, data, cqId)) {
+                return;
+            }
         }
         if (CB_ADDR_BACK.equals(data)) {
             answerCallback(cqId);
@@ -1129,9 +1138,6 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
                 .text("Адрес проживания")
                 .callbackData(CB_EDIT_ADDR_HAB)
                 .build()));
-        rows.add(List.of(
-                InlineKeyboardButton.builder().text("✅ Профосмотр пройден").callbackData(CB_MED_YES).build(),
-                InlineKeyboardButton.builder().text("❌ Не пройден").callbackData(CB_MED_NO).build()));
         sendAndLog(SendMessage.builder()
                 .chatId(chatId)
                 .text("Контакты в боте: только адреса. Телефон меняется только в учётной системе.\n\nЧто изменить?")
@@ -1244,7 +1250,7 @@ public class VzvodTelegramBot extends TelegramLongPollingBot {
         sb.append("Регистрация: ").append(addressLine(p.registration())).append('\n');
         sb.append("Проживание: ").append(addressLine(p.habitation())).append('\n');
         boolean med = p.medicalExamination() != null && p.medicalExamination();
-        sb.append("Профосмотр: ").append(med ? "✅ пройден" : "❌ не отмечен").append('\n');
+        sb.append("Профосмотр: ").append(med ? "Пройден" : "Не пройден").append('\n');
         if (p.idCardIssued() != null && p.idCardUntil() != null) {
             sb.append("Удостоверение: с ")
                     .append(p.idCardIssued().format(DATE_RU))

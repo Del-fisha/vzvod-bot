@@ -29,6 +29,26 @@ public class CoreProfileClient {
                 .header("X-Telegram-Chat-Id", Long.toString(telegramChatId)), BotProfileDto.class);
     }
 
+    public AnnualDtos.AnnualBoardDto getAnnual(long telegramChatId) {
+        return jsonBody(restClient.get()
+                .uri("/api/bot/me/annual")
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId)), AnnualDtos.AnnualBoardDto.class);
+    }
+
+    public AnnualDtos.AnnualBoardDto setAnnualFlags(long telegramChatId, AnnualDtos.AnnualFlagsRequest body) {
+        return jsonBody(restClient.put()
+                .uri("/api/bot/me/annual/flags")
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body), AnnualDtos.AnnualBoardDto.class);
+    }
+
+    public AnnualDtos.AnnualRosterDto getAnnualOthers(long telegramChatId) {
+        return jsonBody(restClient.get()
+                .uri("/api/bot/me/annual/others")
+                .header("X-Telegram-Chat-Id", Long.toString(telegramChatId)), AnnualDtos.AnnualRosterDto.class);
+    }
+
     public BotProfileDto updateProfile(long telegramChatId, BotProfilePatchDto patch) {
         return jsonBody(restClient.put()
                 .uri("/api/bot/me/profile")
